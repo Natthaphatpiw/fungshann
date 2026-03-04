@@ -64,6 +64,7 @@ export interface OTSummaryRow {
   employeeName: string;
   department: string;
   position: string;
+  workDays: number;
   ot1: number;
   ot2: number;
   ot3: number;
@@ -81,6 +82,7 @@ export interface OTSummaryResponse {
   days: PeriodDay[];
   rows: OTSummaryRow[];
   totals: {
+    workDays: number;
     ot1: number;
     ot2: number;
     ot3: number;

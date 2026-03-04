@@ -25,11 +25,11 @@ export async function GET(request: Request) {
     "ชื่อพนักงาน",
     "แผนก",
     "ตำแหน่ง",
-    "รวม OT",
+    "จำนวนวันที่ทำงาน",
     "OT 1.5",
     "OT 2",
     "OT 3",
-    "รวม OT (คำนวณ)",
+    "มูลค่า OT",
     "OT 1.5 (x1.5)",
     "OT 2 (x2)",
     "OT 3 (x3)",
@@ -41,7 +41,7 @@ export async function GET(request: Request) {
     row.employeeName,
     row.department,
     row.position,
-    row.totalOt,
+    row.workDays,
     row.ot1,
     row.ot2,
     row.ot3,
@@ -51,12 +51,33 @@ export async function GET(request: Request) {
     row.otPay3x,
     ...summary.days.map((day) => row.dayTotals[day.key] || 0)
   ]);
+  const totalRow = [
+    "TOTAL",
+    "",
+    "",
+    "",
+    summary.totals.workDays,
+    summary.totals.ot1,
+    summary.totals.ot2,
+    summary.totals.ot3,
+    summary.totals.otPay,
+    summary.totals.otPay1x5,
+    summary.totals.otPay2x,
+    summary.totals.otPay3x,
+    ...summary.days.map((day) =>
+      summary.rows.reduce(
+        (total, row) => Number((total + (row.dayTotals[day.key] || 0)).toFixed(2)),
+        0
+      )
+    )
+  ];
 
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("OT");
 
   worksheet.addRow(header);
   rows.forEach((row) => worksheet.addRow(row));
+  worksheet.addRow(totalRow);
   worksheet.views = [{ state: "frozen", ySplit: 1 }];
 
   worksheet.getRow(1).font = {
@@ -78,6 +99,17 @@ export async function GET(request: Request) {
 
     column.width = index <= 10 ? 16 : 12;
   });
+
+  const totalExcelRow = worksheet.rowCount;
+  worksheet.getRow(totalExcelRow).font = {
+    bold: true,
+    color: { argb: "FF12315F" }
+  };
+  worksheet.getRow(totalExcelRow).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFF7FAFF" }
+  };
 
   const buffer = await workbook.xlsx.writeBuffer();
 

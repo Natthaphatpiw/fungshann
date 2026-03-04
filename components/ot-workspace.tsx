@@ -2,7 +2,25 @@
 
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 
-import { OTSummaryResponse } from "@/lib/types";
+import { OTSummaryResponse, OTSummaryRow } from "@/lib/types";
+
+type PeriodSelection = ReturnType<typeof buildDefaultSelection>;
+type SortDirection = "asc" | "desc";
+type SortKey =
+  | ""
+  | "employeeId"
+  | "employeeName"
+  | "department"
+  | "position"
+  | "workDays"
+  | "ot1"
+  | "ot2"
+  | "ot3"
+  | "otPay"
+  | "otPay1x5"
+  | "otPay2x"
+  | "otPay3x"
+  | `day:${string}`;
 
 function buildDefaultSelection() {
   const now = new Date();
@@ -13,17 +31,98 @@ function buildDefaultSelection() {
   };
 }
 
+function formatCurrency(value: number) {
+  return value.toLocaleString("th-TH", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function compareText(left: string, right: string) {
+  return left.localeCompare(right, "th");
+}
+
+function sortRows(rows: OTSummaryRow[], sortKey: SortKey, sortDirection: SortDirection) {
+  if (!sortKey) {
+    return [...rows];
+  }
+
+  const multiplier = sortDirection === "asc" ? 1 : -1;
+
+  return [...rows].sort((left, right) => {
+    let comparison = 0;
+
+    switch (sortKey) {
+      case "employeeId":
+        comparison = compareText(left.employeeId, right.employeeId);
+        break;
+      case "employeeName":
+        comparison = compareText(left.employeeName, right.employeeName);
+        break;
+      case "department":
+        comparison = compareText(left.department, right.department);
+        break;
+      case "position":
+        comparison = compareText(left.position, right.position);
+        break;
+      case "workDays":
+        comparison = left.workDays - right.workDays;
+        break;
+      case "ot1":
+        comparison = left.ot1 - right.ot1;
+        break;
+      case "ot2":
+        comparison = left.ot2 - right.ot2;
+        break;
+      case "ot3":
+        comparison = left.ot3 - right.ot3;
+        break;
+      case "otPay":
+        comparison = left.otPay - right.otPay;
+        break;
+      case "otPay1x5":
+        comparison = left.otPay1x5 - right.otPay1x5;
+        break;
+      case "otPay2x":
+        comparison = left.otPay2x - right.otPay2x;
+        break;
+      case "otPay3x":
+        comparison = left.otPay3x - right.otPay3x;
+        break;
+      default:
+        if (sortKey.startsWith("day:")) {
+          const dayKey = sortKey.slice(4);
+          comparison = (left.dayTotals[dayKey] || 0) - (right.dayTotals[dayKey] || 0);
+        }
+        break;
+    }
+
+    if (comparison === 0) {
+      return compareText(left.employeeId, right.employeeId) * multiplier;
+    }
+
+    return comparison * multiplier;
+  });
+}
+
 export function OtWorkspace() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectionDraft, setSelectionDraft] = useState(buildDefaultSelection);
-  const [selection, setSelection] = useState<ReturnType<typeof buildDefaultSelection> | null>(null);
+  const [selection, setSelection] = useState<PeriodSelection | null>(null);
   const [summary, setSummary] = useState<OTSummaryResponse | null>(null);
   const [isTableExpanded, setIsTableExpanded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [showModal, setShowModal] = useState(true);
+  const [showPeriodModal, setShowPeriodModal] = useState(true);
+  const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>("");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
+  const [employeePickerDraftIds, setEmployeePickerDraftIds] = useState<string[]>([]);
+  const [employeeSearch, setEmployeeSearch] = useState("");
 
   const exportHref = selection
     ? `/api/ot/export?${new URLSearchParams({
@@ -33,7 +132,7 @@ export function OtWorkspace() {
       }).toString()}`
     : "#";
 
-  async function loadSummary(nextSelection: ReturnType<typeof buildDefaultSelection>) {
+  async function loadSummary(nextSelection: PeriodSelection) {
     const query = new URLSearchParams({
       period: String(nextSelection.period),
       month: String(nextSelection.month),
@@ -66,6 +165,27 @@ export function OtWorkspace() {
 
     void loadSummary(selection);
   }, [selection]);
+
+  useEffect(() => {
+    if (!summary) {
+      return;
+    }
+
+    const availableIds = new Set(summary.rows.map((row) => row.employeeId));
+    const availableDepartments = new Set(
+      summary.rows
+        .map((row) => row.department.trim())
+        .filter((department) => department.length > 0)
+    );
+
+    setSelectedEmployeeIds((current) => current.filter((employeeId) => availableIds.has(employeeId)));
+    setEmployeePickerDraftIds((current) =>
+      current.filter((employeeId) => availableIds.has(employeeId))
+    );
+    setDepartmentFilter((current) =>
+      current === "ALL" || availableDepartments.has(current) ? current : "ALL"
+    );
+  }, [summary]);
 
   async function handleImport(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -104,8 +224,149 @@ export function OtWorkspace() {
     event.target.value = "";
   }
 
-  function closeModal() {
-    setShowModal(false);
+  function closePeriodModal() {
+    setShowPeriodModal(false);
+  }
+
+  function openEmployeePicker() {
+    setEmployeePickerDraftIds(selectedEmployeeIds);
+    setEmployeeSearch("");
+    setShowEmployeeModal(true);
+  }
+
+  function resetViewState() {
+    setDepartmentFilter("ALL");
+    setSortKey("");
+    setSortDirection("asc");
+    setSelectedEmployeeIds([]);
+    setEmployeePickerDraftIds([]);
+    setEmployeeSearch("");
+  }
+
+  function toggleSort(nextKey: SortKey) {
+    if (sortKey === nextKey) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+
+    setSortKey(nextKey);
+    setSortDirection("asc");
+  }
+
+  const departmentOptions = summary
+    ? [...new Set(summary.rows.map((row) => row.department.trim()).filter(Boolean))].sort(compareText)
+    : [];
+
+  const filteredRows = (() => {
+    if (!summary) {
+      return [];
+    }
+
+    let rows = [...summary.rows];
+
+    if (departmentFilter !== "ALL") {
+      rows = rows.filter((row) => row.department.trim() === departmentFilter);
+    }
+
+    if (selectedEmployeeIds.length > 0) {
+      const selectedSet = new Set(selectedEmployeeIds);
+      rows = rows.filter((row) => selectedSet.has(row.employeeId));
+    }
+
+    return sortRows(rows, sortKey, sortDirection);
+  })();
+
+  const employeePickerRows = (() => {
+    if (!summary) {
+      return [];
+    }
+
+    const keyword = employeeSearch.trim().toLowerCase();
+
+    if (!keyword) {
+      return summary.rows;
+    }
+
+    return summary.rows.filter((row) =>
+      [row.employeeId, row.employeeName, row.department, row.position]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword)
+    );
+  })();
+
+  const visiblePickerIds = employeePickerRows.map((row) => row.employeeId);
+
+  const visibleTotals = (() => {
+    const dayTotals = Object.fromEntries(
+      (summary?.days || []).map((day) => [
+        day.key,
+        Number(
+          filteredRows
+            .reduce((total, row) => total + (row.dayTotals[day.key] || 0), 0)
+            .toFixed(2)
+        )
+      ])
+    );
+
+    return {
+      workDays: filteredRows.reduce((total, row) => total + row.workDays, 0),
+      ot1: Number(filteredRows.reduce((total, row) => total + row.ot1, 0).toFixed(2)),
+      ot2: Number(filteredRows.reduce((total, row) => total + row.ot2, 0).toFixed(2)),
+      ot3: Number(filteredRows.reduce((total, row) => total + row.ot3, 0).toFixed(2)),
+      otPay: Number(filteredRows.reduce((total, row) => total + row.otPay, 0).toFixed(2)),
+      otPay1x5: Number(filteredRows.reduce((total, row) => total + row.otPay1x5, 0).toFixed(2)),
+      otPay2x: Number(filteredRows.reduce((total, row) => total + row.otPay2x, 0).toFixed(2)),
+      otPay3x: Number(filteredRows.reduce((total, row) => total + row.otPay3x, 0).toFixed(2)),
+      dayTotals
+    };
+  })();
+
+  const visibleColumnCount =
+    2 +
+    (isTableExpanded ? 2 : 0) +
+    1 +
+    3 +
+    1 +
+    (isTableExpanded ? 3 : 0) +
+    (isTableExpanded ? summary?.days.length || 0 : 0);
+
+  function renderSortButton(label: string, nextKey: SortKey) {
+    const isActive = sortKey === nextKey;
+
+    return (
+      <button
+        className={`table-sort-button ${isActive ? "active" : ""}`}
+        type="button"
+        onClick={() => toggleSort(nextKey)}
+      >
+        <span>{label}</span>
+        <span className="sort-indicator">
+          {isActive ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}
+        </span>
+      </button>
+    );
+  }
+
+  function renderDaySortButton(dayKey: string, dayNumber: number, weekdayShort: string) {
+    const nextKey = `day:${dayKey}` as SortKey;
+    const isActive = sortKey === nextKey;
+
+    return (
+      <button
+        className={`table-sort-button day-sort-button ${isActive ? "active" : ""}`}
+        type="button"
+        onClick={() => toggleSort(nextKey)}
+      >
+        <div className="day-header">
+          <strong>{dayNumber}</strong>
+          <span>{weekdayShort}</span>
+        </div>
+        <span className="sort-indicator">
+          {isActive ? (sortDirection === "asc" ? "↑" : "↓") : "↕"}
+        </span>
+      </button>
+    );
   }
 
   return (
@@ -116,7 +377,8 @@ export function OtWorkspace() {
             <div className="eyebrow">Overtime Workflow</div>
             <h1>ชั่วโมง OT</h1>
             <p className="muted-text">
-              อัปโหลดไฟล์สแกนหน้าแบบ `.txt` เพื่อคำนวณ OT, บันทึกทับไฟล์ CSV ในรีโป และส่งออกเป็น Excel
+              อัปโหลดไฟล์สแกนหน้าแบบ `.txt` ระบบจะกันข้อมูลซ้ำ, บันทึกสะสมลง `scan.csv`,
+              คำนวณ OT จากข้อมูลสะสม และส่งออกเป็น Excel
             </p>
           </div>
         </div>
@@ -131,7 +393,7 @@ export function OtWorkspace() {
             </a>
           </div>
           <div className="toolbar-right">
-            <button className="secondary-button" type="button" onClick={() => setShowModal(true)}>
+            <button className="secondary-button" type="button" onClick={() => setShowPeriodModal(true)}>
               เลือกงวด
             </button>
             <button
@@ -161,8 +423,8 @@ export function OtWorkspace() {
             <strong>{summary?.periodLabel || "ยังไม่ได้เลือกงวด"}</strong>
           </div>
           <div className="summary-pill">
-            <span>รายการที่คำนวณแล้ว</span>
-            <strong>{summary ? `${summary.recordCount} วันทำงาน` : "-"}</strong>
+            <span>รายการที่จับคู่เข้า-ออกได้</span>
+            <strong>{summary ? `${summary.recordCount} รายการ` : "-"}</strong>
           </div>
           <div className="summary-pill">
             <span>อัปเดตล่าสุด</span>
@@ -175,6 +437,10 @@ export function OtWorkspace() {
         </div>
 
         <div className="metric-grid">
+          <div className="metric-card">
+            <span>วันทำงานรวม</span>
+            <strong>{summary ? String(summary.totals.workDays) : "0"}</strong>
+          </div>
           <div className="metric-card">
             <span>รวม OT</span>
             <strong>{summary?.totals.totalOt.toFixed(2) || "0.00"}</strong>
@@ -193,12 +459,40 @@ export function OtWorkspace() {
           </div>
           <div className="metric-card">
             <span>มูลค่า OT</span>
-            <strong>
-              {summary?.totals.otPay.toLocaleString("th-TH", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-              }) || "0.00"}
-            </strong>
+            <strong>{summary ? formatCurrency(summary.totals.otPay) : "0.00"}</strong>
+          </div>
+        </div>
+
+        <div className="toolbar-row">
+          <div className="toolbar-left">
+            <label className="field compact-field">
+              <span>ฟิลเตอร์แผนก</span>
+              <select
+                className="toolbar-select"
+                value={departmentFilter}
+                onChange={(event) => setDepartmentFilter(event.target.value)}
+              >
+                <option value="ALL">ทุกแผนก</option>
+                {departmentOptions.map((department) => (
+                  <option key={department} value={department}>
+                    {department}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="secondary-button" type="button" onClick={openEmployeePicker}>
+              เลือกพนักงาน
+            </button>
+            <button className="secondary-button" type="button" onClick={resetViewState}>
+              ล้าง
+            </button>
+          </div>
+          <div className="toolbar-right">
+            <div className="toolbar-note">
+              {selectedEmployeeIds.length > 0
+                ? `กำลังแสดงพนักงานที่เลือก ${selectedEmployeeIds.length} คน`
+                : "กำลังแสดงพนักงานทุกคน"}
+            </div>
           </div>
         </div>
 
@@ -208,8 +502,8 @@ export function OtWorkspace() {
               <strong>{isTableExpanded ? "โหมดขยายตาราง" : "โหมดกะทัดรัด"}</strong>
               <span>
                 {isTableExpanded
-                  ? "แสดงรายละเอียดแผนก, ตัวคูณ และผลรวมรายวันครบทั้งหมด"
-                  : "แสดงคอลัมน์หลักให้พอดีกับหน้าจอ และซ่อนคอลัมน์รายวันไว้ก่อน"}
+                  ? "แสดงแผนก, ตำแหน่ง, จำนวนวันทำงาน, ตัวคูณ OT และยอดรายวันครบทั้งหมด"
+                  : "แสดงคอลัมน์หลักให้พอดีกับหน้าจอโดยยังสามารถ sort ได้ทุกคอลัมน์ที่มองเห็น"}
               </span>
             </div>
             <button
@@ -228,67 +522,105 @@ export function OtWorkspace() {
               <table className={`data-table ot-table ${isTableExpanded ? "expanded" : "compact"}`}>
                 <thead>
                   <tr>
-                    <th>รหัสพนักงาน</th>
-                    <th>ชื่อพนักงาน</th>
-                    {isTableExpanded ? <th>แผนก</th> : null}
-                    <th>รวม OT</th>
-                    <th>OT 1.5</th>
-                    <th>OT 2</th>
-                    <th>OT 3</th>
-                    <th>รวม OT (คำนวณ)</th>
-                    {isTableExpanded ? <th>OT 1.5 (x1.5)</th> : null}
-                    {isTableExpanded ? <th>OT 2 (x2)</th> : null}
-                    {isTableExpanded ? <th>OT 3 (x3)</th> : null}
+                    <th>{renderSortButton("รหัสพนักงาน", "employeeId")}</th>
+                    <th>{renderSortButton("ชื่อพนักงาน", "employeeName")}</th>
+                    {isTableExpanded ? <th>{renderSortButton("แผนก", "department")}</th> : null}
+                    {isTableExpanded ? <th>{renderSortButton("ตำแหน่ง", "position")}</th> : null}
+                    <th>{renderSortButton("วันทำงาน", "workDays")}</th>
+                    <th>{renderSortButton("OT 1.5", "ot1")}</th>
+                    <th>{renderSortButton("OT 2", "ot2")}</th>
+                    <th>{renderSortButton("OT 3", "ot3")}</th>
+                    <th>{renderSortButton("มูลค่า OT", "otPay")}</th>
+                    {isTableExpanded ? <th>{renderSortButton("OT 1.5 (x1.5)", "otPay1x5")}</th> : null}
+                    {isTableExpanded ? <th>{renderSortButton("OT 2 (x2)", "otPay2x")}</th> : null}
+                    {isTableExpanded ? <th>{renderSortButton("OT 3 (x3)", "otPay3x")}</th> : null}
                     {isTableExpanded
                       ? summary.days.map((day) => (
-                      <th key={day.key}>
-                        <div className="day-header">
-                          <strong>{day.dayNumber}</strong>
-                          <span>{day.weekdayShort}</span>
-                        </div>
-                      </th>
+                          <th key={day.key}>
+                            {renderDaySortButton(day.key, day.dayNumber, day.weekdayShort)}
+                          </th>
                         ))
                       : null}
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.rows.map((row) => (
-                    <tr key={row.employeeId}>
-                      <td>{row.employeeId}</td>
-                      <td>{row.employeeName || "-"}</td>
-                      {isTableExpanded ? <td>{row.department || "-"}</td> : null}
-                      <td className="numeric strong">{row.totalOt.toFixed(2)}</td>
-                      <td className="numeric">{row.ot1.toFixed(2)}</td>
-                      <td className="numeric">{row.ot2.toFixed(2)}</td>
-                      <td className="numeric">{row.ot3.toFixed(2)}</td>
-                      <td className="numeric strong">
-                        {row.otPay.toLocaleString("th-TH", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2
-                        })}
+                  {filteredRows.length > 0 ? (
+                    filteredRows.map((row) => (
+                      <tr key={row.employeeId}>
+                        <td>{row.employeeId}</td>
+                        <td>{row.employeeName || "-"}</td>
+                        {isTableExpanded ? <td>{row.department || "-"}</td> : null}
+                        {isTableExpanded ? <td>{row.position || "-"}</td> : null}
+                        <td className="numeric strong">{row.workDays}</td>
+                        <td className="numeric">{row.ot1.toFixed(2)}</td>
+                        <td className="numeric">{row.ot2.toFixed(2)}</td>
+                        <td className="numeric">{row.ot3.toFixed(2)}</td>
+                        <td className="numeric strong">{formatCurrency(row.otPay)}</td>
+                        {isTableExpanded ? (
+                          <td className="numeric">{row.otPay1x5.toFixed(2)}</td>
+                        ) : null}
+                        {isTableExpanded ? (
+                          <td className="numeric">{row.otPay2x.toFixed(2)}</td>
+                        ) : null}
+                        {isTableExpanded ? (
+                          <td className="numeric">{row.otPay3x.toFixed(2)}</td>
+                        ) : null}
+                        {isTableExpanded
+                          ? summary.days.map((day) => (
+                              <td key={`${row.employeeId}-${day.key}`} className="numeric">
+                                <span
+                                  className={`day-chip ${
+                                    row.dayTotals[day.key] > 0 ? "has-value" : ""
+                                  }`}
+                                >
+                                  {row.dayTotals[day.key] > 0
+                                    ? row.dayTotals[day.key].toFixed(2)
+                                    : ""}
+                                </span>
+                              </td>
+                            ))
+                          : null}
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className="empty-table-cell" colSpan={visibleColumnCount}>
+                        ไม่พบข้อมูลตามเงื่อนไขที่เลือก
                       </td>
+                    </tr>
+                  )}
+
+                  {filteredRows.length > 0 ? (
+                    <tr className="total-row">
+                      <td>TOTAL</td>
+                      <td>{`${filteredRows.length} คน`}</td>
+                      {isTableExpanded ? <td>-</td> : null}
+                      {isTableExpanded ? <td>-</td> : null}
+                      <td className="numeric strong">{visibleTotals.workDays}</td>
+                      <td className="numeric strong">{visibleTotals.ot1.toFixed(2)}</td>
+                      <td className="numeric strong">{visibleTotals.ot2.toFixed(2)}</td>
+                      <td className="numeric strong">{visibleTotals.ot3.toFixed(2)}</td>
+                      <td className="numeric strong">{formatCurrency(visibleTotals.otPay)}</td>
                       {isTableExpanded ? (
-                        <td className="numeric">{row.otPay1x5.toFixed(2)}</td>
+                        <td className="numeric strong">{visibleTotals.otPay1x5.toFixed(2)}</td>
                       ) : null}
                       {isTableExpanded ? (
-                        <td className="numeric">{row.otPay2x.toFixed(2)}</td>
+                        <td className="numeric strong">{visibleTotals.otPay2x.toFixed(2)}</td>
                       ) : null}
                       {isTableExpanded ? (
-                        <td className="numeric">{row.otPay3x.toFixed(2)}</td>
+                        <td className="numeric strong">{visibleTotals.otPay3x.toFixed(2)}</td>
                       ) : null}
                       {isTableExpanded
                         ? summary.days.map((day) => (
-                        <td key={`${row.employeeId}-${day.key}`} className="numeric">
-                          <span
-                            className={`day-chip ${row.dayTotals[day.key] > 0 ? "has-value" : ""}`}
-                          >
-                            {row.dayTotals[day.key] > 0 ? row.dayTotals[day.key].toFixed(2) : ""}
-                          </span>
-                        </td>
+                            <td key={`total-${day.key}`} className="numeric strong">
+                              {visibleTotals.dayTotals[day.key] > 0
+                                ? visibleTotals.dayTotals[day.key].toFixed(2)
+                                : "-"}
+                            </td>
                           ))
                         : null}
                     </tr>
-                  ))}
+                  ) : null}
                 </tbody>
               </table>
             </div>
@@ -298,8 +630,8 @@ export function OtWorkspace() {
         </div>
       </div>
 
-      {showModal ? (
-        <div className="modal-overlay" onClick={closeModal}>
+      {showPeriodModal ? (
+        <div className="modal-overlay" onClick={closePeriodModal}>
           <div className="modal-card" onClick={(event) => event.stopPropagation()}>
             <div className="modal-top">
               <div>
@@ -309,7 +641,7 @@ export function OtWorkspace() {
               <button
                 className="icon-button modal-close"
                 type="button"
-                onClick={closeModal}
+                onClick={closePeriodModal}
                 aria-label="ปิดหน้าต่าง"
                 title="ปิดหน้าต่าง"
               >
@@ -377,7 +709,7 @@ export function OtWorkspace() {
 
             <div className="modal-actions">
               {selection ? (
-                <button className="secondary-button" type="button" onClick={closeModal}>
+                <button className="secondary-button" type="button" onClick={closePeriodModal}>
                   ยกเลิก
                 </button>
               ) : null}
@@ -386,11 +718,106 @@ export function OtWorkspace() {
                 type="button"
                 onClick={() => {
                   setSelection(selectionDraft);
-                  closeModal();
+                  closePeriodModal();
                 }}
               >
                 ตกลง
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showEmployeeModal ? (
+        <div className="modal-overlay" onClick={() => setShowEmployeeModal(false)}>
+          <div className="modal-card wide-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-top">
+              <div>
+                <div className="eyebrow">เลือกข้อมูลที่จะแสดง</div>
+                <h2>เลือกพนักงานในตาราง OT</h2>
+              </div>
+              <button
+                className="icon-button modal-close"
+                type="button"
+                onClick={() => setShowEmployeeModal(false)}
+                aria-label="ปิดหน้าต่าง"
+                title="ปิดหน้าต่าง"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="modal-section">
+              <label className="field">
+                <span>ค้นหาจากชื่อหรือรหัสพนักงาน</span>
+                <input
+                  value={employeeSearch}
+                  onChange={(event) => setEmployeeSearch(event.target.value)}
+                  placeholder="พิมพ์ชื่อหรือรหัสพนักงาน"
+                />
+              </label>
+
+              <div className="inline-actions">
+                <button
+                  className="secondary-button small-button"
+                  type="button"
+                  onClick={() => setEmployeePickerDraftIds(visiblePickerIds)}
+                >
+                  เลือกทั้งหมดที่ค้นเจอ
+                </button>
+                <button
+                  className="secondary-button small-button"
+                  type="button"
+                  onClick={() => setEmployeePickerDraftIds([])}
+                >
+                  แสดงทุกคน
+                </button>
+              </div>
+
+              <div className="picker-list">
+                {employeePickerRows.map((row) => {
+                  const isChecked = employeePickerDraftIds.includes(row.employeeId);
+
+                  return (
+                    <label className="picker-item" key={row.employeeId}>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(event) =>
+                          setEmployeePickerDraftIds((current) => {
+                            if (event.target.checked) {
+                              return [...new Set([...current, row.employeeId])];
+                            }
+
+                            return current.filter((employeeId) => employeeId !== row.employeeId);
+                          })
+                        }
+                      />
+                      <span className="picker-item-text">
+                        <strong>{row.employeeId}</strong>
+                        <span>{row.employeeName || "-"}</span>
+                        <small>{[row.department, row.position].filter(Boolean).join(" / ") || "-"}</small>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div className="modal-actions">
+                <button className="secondary-button" type="button" onClick={() => setShowEmployeeModal(false)}>
+                  ยกเลิก
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => {
+                    setSelectedEmployeeIds(employeePickerDraftIds);
+                    setShowEmployeeModal(false);
+                  }}
+                >
+                  แสดงตามที่เลือก
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 
 import { OFFICE_KEYWORDS, TRANSPORT_KEYWORDS } from "@/lib/constants";
-import { getOtStoragePath, parseCsvFile, writeCsvFile } from "@/lib/csv";
+import { getOtStoragePath, getScanStoragePath, parseCsvFile, writeCsvFile } from "@/lib/csv";
 import { readEmployeeMap, readEmployees } from "@/lib/employees";
 import { buildPeriodLabel, enumeratePeriodDays, getPeriodRange, toIsoDate } from "@/lib/periods";
 import {
@@ -32,6 +32,16 @@ const STORAGE_HEADERS = [
   "totalOt",
   "otPay",
   "notes"
+];
+
+const SCAN_STORAGE_HEADERS = [
+  "โรงงาน",
+  "รหัสเครื่อง",
+  "วันที่แสกน",
+  "เวลาแสกน",
+  "รหัสพนักงาน",
+  "ประเภท",
+  "วันที่เวลาแสกน"
 ];
 
 function roundDownHalfHour(hours: number): number {
@@ -103,6 +113,34 @@ function parseLogDate(dateLabel: string, timeLabel: string): Date | null {
   }
 
   return new Date(year, month - 1, day, hour, minute, Number.isNaN(second) ? 0 : second, 0);
+}
+
+function formatScanDate(date: Date): string {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = String(date.getFullYear());
+  return `${day}-${month}-${year}`;
+}
+
+function formatScanTime(date: Date): string {
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const second = String(date.getSeconds()).padStart(2, "0");
+  return `${hour}:${minute}:${second}`;
+}
+
+function getFactoryLabel(factoryId: FactoryId): string {
+  return factoryId === "factory1" ? "โรงงาน 1" : "โรงงาน 3";
+}
+
+function buildRawScanKey(factoryId: FactoryId, scan: RawScan): string {
+  return [
+    factoryId,
+    scan.employeeId,
+    scan.machineCode,
+    scan.type,
+    scan.scannedAt.toISOString()
+  ].join("|");
 }
 
 function isKeywordMatch(text: string, keywords: string[]): boolean {
@@ -396,7 +434,21 @@ function computeRegularOt(session: WorkSession, profile: ReturnType<typeof getSh
     );
   }
 
-  const hours = roundDownHalfHour((preMinutes + Math.max(0, postMinutes)) / 60);
+  const safePostMinutes = Math.max(0, postMinutes);
+  const isTransportShift =
+    profile.shiftCode === "transport10" || profile.shiftCode === "transport12";
+  const crossesMidnight =
+    session.enteredAt.getFullYear() !== session.exitedAt.getFullYear() ||
+    session.enteredAt.getMonth() !== session.exitedAt.getMonth() ||
+    session.enteredAt.getDate() !== session.exitedAt.getDate();
+  const hours =
+    isTransportShift && crossesMidnight
+      ? Number(
+          (
+            roundDownHalfHour(preMinutes / 60) + Math.floor(safePostMinutes / 60)
+          ).toFixed(2)
+        )
+      : roundDownHalfHour((preMinutes + safePostMinutes) / 60);
   const notes: string[] = [];
 
   if (preMinutes > 0) {
@@ -483,7 +535,7 @@ function calculateOtPay(employee: EmployeeRecord | undefined, ot1: number, ot2: 
     Number.isFinite(parsedDaily) && parsedDaily > 0
       ? parsedDaily
       : Number.isFinite(parsedMonthly) && parsedMonthly > 0
-        ? parsedMonthly / 30
+        ? parsedMonthly / 15
         : 0;
   const hourlyRate = baseDaily > 0 ? baseDaily / 8 : 0;
 
@@ -528,6 +580,141 @@ export function parseBiometricLog(content: string): RawScan[] {
   }
 
   return scans.sort((left, right) => left.scannedAt.getTime() - right.scannedAt.getTime());
+}
+
+export async function loadStoredScans(factoryId?: FactoryId): Promise<RawScan[]> {
+  try {
+    const rows = await parseCsvFile(getScanStoragePath());
+
+    return rows
+      .filter((row) => {
+        const label = String(row["โรงงาน"] ?? "").trim();
+        if (!factoryId) {
+          return true;
+        }
+
+        if (!label) {
+          return factoryId === "factory1";
+        }
+
+        return label === getFactoryLabel(factoryId);
+      })
+      .map((row) => {
+        const isoValue = String(row["วันที่เวลาแสกน"] ?? "").trim();
+        const dateLabel = String(row["วันที่แสกน"] ?? "").trim();
+        const timeLabel = String(row["เวลาแสกน"] ?? "").trim();
+        const scannedAt =
+          (isoValue ? new Date(isoValue) : parseLogDate(dateLabel, timeLabel)) ?? new Date("");
+
+        return {
+          employeeId: String(row["รหัสพนักงาน"] ?? "").trim(),
+          machineCode: String(row["รหัสเครื่อง"] ?? "").trim(),
+          type: (String(row["ประเภท"] ?? "").trim() === "2" ? 2 : 1) as 1 | 2,
+          scannedAt
+        };
+      })
+      .filter(
+        (scan) =>
+          scan.employeeId.length > 0 &&
+          scan.machineCode.length > 0 &&
+          !Number.isNaN(scan.scannedAt.getTime())
+      )
+      .sort((left, right) => left.scannedAt.getTime() - right.scannedAt.getTime());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+export async function appendScansToStorage(
+  factoryId: FactoryId,
+  scans: RawScan[]
+): Promise<{ addedCount: number; duplicateCount: number; totalCount: number }> {
+  let rows: Record<string, string>[] = [];
+
+  try {
+    rows = await parseCsvFile(getScanStoragePath());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const normalisedRows = rows.map((row) => {
+    const dateLabel = String(row["วันที่แสกน"] ?? "").trim();
+    const timeLabel = String(row["เวลาแสกน"] ?? "").trim();
+    const isoValue = String(row["วันที่เวลาแสกน"] ?? "").trim();
+    const parsed = isoValue ? new Date(isoValue) : parseLogDate(dateLabel, timeLabel);
+
+    return {
+      โรงงาน: String(row["โรงงาน"] ?? "").trim(),
+      รหัสเครื่อง: String(row["รหัสเครื่อง"] ?? "").trim(),
+      วันที่แสกน: dateLabel,
+      เวลาแสกน: timeLabel,
+      รหัสพนักงาน: String(row["รหัสพนักงาน"] ?? "").trim(),
+      ประเภท: String(row["ประเภท"] ?? "").trim(),
+      วันที่เวลาแสกน:
+        parsed && !Number.isNaN(parsed.getTime())
+          ? parsed.toISOString()
+          : String(row["วันที่เวลาแสกน"] ?? "").trim()
+    };
+  });
+
+  const existingKeys = new Set(
+    normalisedRows
+      .filter((row) => row["โรงงาน"] && row["รหัสเครื่อง"] && row["รหัสพนักงาน"] && row["วันที่เวลาแสกน"])
+      .map((row) =>
+        [
+          row["โรงงาน"] === "โรงงาน 3" ? "factory3" : "factory1",
+          row["รหัสพนักงาน"],
+          row["รหัสเครื่อง"],
+          row["ประเภท"] === "2" ? "2" : "1",
+          row["วันที่เวลาแสกน"]
+        ].join("|")
+      )
+  );
+
+  let addedCount = 0;
+  let duplicateCount = 0;
+  const factoryLabel = getFactoryLabel(factoryId);
+
+  for (const scan of scans) {
+    const key = buildRawScanKey(factoryId, scan);
+
+    if (existingKeys.has(key)) {
+      duplicateCount += 1;
+      continue;
+    }
+
+    existingKeys.add(key);
+    normalisedRows.push({
+      โรงงาน: factoryLabel,
+      รหัสเครื่อง: scan.machineCode,
+      วันที่แสกน: formatScanDate(scan.scannedAt),
+      เวลาแสกน: formatScanTime(scan.scannedAt),
+      รหัสพนักงาน: scan.employeeId,
+      ประเภท: String(scan.type),
+      วันที่เวลาแสกน: scan.scannedAt.toISOString()
+    });
+    addedCount += 1;
+  }
+
+  normalisedRows.sort((left, right) => {
+    const leftDate = new Date(left["วันที่เวลาแสกน"]).getTime();
+    const rightDate = new Date(right["วันที่เวลาแสกน"]).getTime();
+    return leftDate - rightDate;
+  });
+
+  await writeCsvFile(getScanStoragePath(), SCAN_STORAGE_HEADERS, normalisedRows);
+
+  return {
+    addedCount,
+    duplicateCount,
+    totalCount: normalisedRows.length
+  };
 }
 
 function buildSessions(scans: RawScan[]): WorkSession[] {
@@ -580,10 +767,29 @@ function buildSessions(scans: RawScan[]): WorkSession[] {
   return sessions.sort((left, right) => left.enteredAt.getTime() - right.enteredAt.getTime());
 }
 
-export async function computeOtRecords(factoryId: FactoryId, content: string): Promise<OTDailyRecord[]> {
-  const scans = parseBiometricLog(content);
+export async function computeOtRecordsFromScans(
+  factoryId: FactoryId,
+  incomingScans: RawScan[]
+): Promise<OTDailyRecord[]> {
+  const dedupedScans = [...incomingScans]
+    .filter((scan) => !Number.isNaN(scan.scannedAt.getTime()))
+    .sort((left, right) => left.scannedAt.getTime() - right.scannedAt.getTime())
+    .filter((scan, index, items) => {
+      if (index === 0) {
+        return true;
+      }
+
+      const previous = items[index - 1];
+
+      return !(
+        previous.employeeId === scan.employeeId &&
+        previous.machineCode === scan.machineCode &&
+        previous.type === scan.type &&
+        previous.scannedAt.getTime() === scan.scannedAt.getTime()
+      );
+    });
   const employeeMap = await readEmployeeMap(factoryId);
-  const sessions = buildSessions(scans);
+  const sessions = buildSessions(dedupedScans);
   const previousByEmployee = new Map<string, WorkSession | null>();
 
   return sessions.map((session) => {
@@ -631,6 +837,10 @@ export async function computeOtRecords(factoryId: FactoryId, content: string): P
       notes
     };
   });
+}
+
+export async function computeOtRecords(factoryId: FactoryId, content: string): Promise<OTDailyRecord[]> {
+  return computeOtRecordsFromScans(factoryId, parseBiometricLog(content));
 }
 
 export async function saveOtRecords(factoryId: FactoryId, records: OTDailyRecord[]): Promise<void> {
@@ -700,6 +910,7 @@ export async function buildOtSummary(
   });
 
   const rowsMap = new Map<string, OTSummaryRow>();
+  const workDaySets = new Map<string, Set<string>>();
 
   for (const employee of employees) {
     rowsMap.set(employee.__id, {
@@ -707,6 +918,7 @@ export async function buildOtSummary(
       employeeName: employee.__fullName,
       department: employee.__department,
       position: employee.__position,
+      workDays: 0,
       ot1: 0,
       ot2: 0,
       ot3: 0,
@@ -726,6 +938,7 @@ export async function buildOtSummary(
         employeeName: record.employeeName,
         department: record.department,
         position: record.position,
+        workDays: 0,
         ot1: 0,
         ot2: 0,
         ot3: 0,
@@ -739,6 +952,10 @@ export async function buildOtSummary(
     }
 
     const row = rowsMap.get(record.employeeId)!;
+    const workDays = workDaySets.get(record.employeeId) ?? new Set<string>();
+    workDays.add(record.workDate);
+    workDaySets.set(record.employeeId, workDays);
+    row.workDays = workDays.size;
     row.ot1 = Number((row.ot1 + record.ot1).toFixed(2));
     row.ot2 = Number((row.ot2 + record.ot2).toFixed(2));
     row.ot3 = Number((row.ot3 + record.ot3).toFixed(2));
@@ -758,6 +975,7 @@ export async function buildOtSummary(
 
   const totals = rows.reduce(
     (accumulator, row) => ({
+      workDays: accumulator.workDays + row.workDays,
       ot1: Number((accumulator.ot1 + row.ot1).toFixed(2)),
       ot2: Number((accumulator.ot2 + row.ot2).toFixed(2)),
       ot3: Number((accumulator.ot3 + row.ot3).toFixed(2)),
@@ -768,6 +986,7 @@ export async function buildOtSummary(
       otPay3x: Number((accumulator.otPay3x + row.otPay3x).toFixed(2))
     }),
     {
+      workDays: 0,
       ot1: 0,
       ot2: 0,
       ot3: 0,

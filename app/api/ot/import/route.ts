@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 
 import { getSession } from "@/lib/auth";
-import { computeOtRecords, saveOtRecords } from "@/lib/ot";
+import {
+  appendScansToStorage,
+  computeOtRecordsFromScans,
+  loadStoredScans,
+  parseBiometricLog,
+  saveOtRecords
+} from "@/lib/ot";
 
 export async function POST(request: Request) {
   const session = await getSession();
@@ -18,10 +24,24 @@ export async function POST(request: Request) {
   }
 
   const content = await file.text();
-  const records = await computeOtRecords(session.factoryId, content);
+  const parsedScans = parseBiometricLog(content);
+
+  if (parsedScans.length === 0) {
+    return NextResponse.json(
+      { message: "ไม่พบข้อมูลสแกนหน้าที่ถูกต้องในไฟล์" },
+      { status: 400 }
+    );
+  }
+
+  const scanResult = await appendScansToStorage(session.factoryId, parsedScans);
+  const accumulatedScans = await loadStoredScans(session.factoryId);
+  const records = await computeOtRecordsFromScans(session.factoryId, accumulatedScans);
   await saveOtRecords(session.factoryId, records);
 
   return NextResponse.json({
-    message: `ประมวลผลสำเร็จ ${records.length} รายการ และบันทึกทับไฟล์ผลลัพธ์ล่าสุดแล้ว`
+    message:
+      `นำเข้าไฟล์สำเร็จ เพิ่มข้อมูลสแกนใหม่ ${scanResult.addedCount} รายการ ` +
+      `(ข้ามข้อมูลซ้ำ ${scanResult.duplicateCount} รายการ) ` +
+      `และคำนวณวันทำงาน/OT จากข้อมูลสะสมแล้ว ${records.length} รายการ`
   });
 }

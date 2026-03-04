@@ -35,6 +35,32 @@ function parseCsvLine(line: string): string[] {
   return fields.map((field) => field.trim());
 }
 
+export function parseCsvContent(content: string): {
+  headers: string[];
+  rows: Record<string, string>[];
+} {
+  const normalised = content.replace(/^\uFEFF/, "");
+  const lines = normalised.split(/\r?\n/).filter((line) => line.trim().length > 0);
+
+  if (lines.length === 0) {
+    return { headers: [], rows: [] };
+  }
+
+  const headers = parseCsvLine(lines[0]);
+  const rows = lines.slice(1).map((line) => {
+    const fields = parseCsvLine(line);
+    const row: Record<string, string> = {};
+
+    headers.forEach((header, index) => {
+      row[header] = fields[index] ?? "";
+    });
+
+    return row;
+  });
+
+  return { headers, rows };
+}
+
 export function serialiseCsvRow(values: Array<string | number | boolean>): string {
   return values
     .map((value) => {
@@ -49,25 +75,12 @@ export function serialiseCsvRow(values: Array<string | number | boolean>): strin
 
 export async function parseCsvFile(filePath: string): Promise<Record<string, string>[]> {
   const content = await fs.readFile(filePath, "utf8");
-  const normalised = content.replace(/^\uFEFF/, "");
-  const lines = normalised.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  return parseCsvContent(content).rows;
+}
 
-  if (lines.length === 0) {
-    return [];
-  }
-
-  const headers = parseCsvLine(lines[0]);
-
-  return lines.slice(1).map((line) => {
-    const fields = parseCsvLine(line);
-    const row: Record<string, string> = {};
-
-    headers.forEach((header, index) => {
-      row[header] = fields[index] ?? "";
-    });
-
-    return row;
-  });
+export async function readCsvHeaders(filePath: string): Promise<string[]> {
+  const content = await fs.readFile(filePath, "utf8");
+  return parseCsvContent(content).headers;
 }
 
 export async function writeCsvFile(
@@ -92,4 +105,8 @@ export function getEmployeeCsvPath(factoryId: FactoryId): string {
 
 export function getOtStoragePath(factoryId: FactoryId): string {
   return path.join(process.cwd(), "storage", `ot_${factoryId}.csv`);
+}
+
+export function getScanStoragePath(): string {
+  return path.join(process.cwd(), "scan.csv");
 }
