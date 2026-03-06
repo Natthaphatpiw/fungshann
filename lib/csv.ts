@@ -110,3 +110,7 @@ export function getOtStoragePath(factoryId: FactoryId): string {
 export function getScanStoragePath(): string {
   return path.join(process.cwd(), "scan.csv");
 }
+
+export function getWageStoragePath(): string {
+  return path.join(process.cwd(), "wage.csv");
+}

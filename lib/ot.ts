@@ -902,12 +902,13 @@ export async function buildOtSummary(
   const records = await loadOtRecords(factoryId);
   const lastUpdatedAt = await getOtLastUpdatedAt(factoryId);
   const { start, end } = getPeriodRange(selection);
+  const startKey = toIsoDate(start);
+  const endKey = toIsoDate(end);
   const days = enumeratePeriodDays(selection);
 
-  const filteredRecords = records.filter((record) => {
-    const workDate = new Date(record.workDate);
-    return workDate >= start && workDate <= end;
-  });
+  const filteredRecords = records.filter(
+    (record) => record.workDate >= startKey && record.workDate <= endKey
+  );
 
   const rowsMap = new Map<string, OTSummaryRow>();
   const workDaySets = new Map<string, Set<string>>();

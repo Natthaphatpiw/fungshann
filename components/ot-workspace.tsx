@@ -717,7 +717,7 @@ export function OtWorkspace() {
                 className="primary-button"
                 type="button"
                 onClick={() => {
-                  setSelection(selectionDraft);
+                  setSelection({ ...selectionDraft });
                   closePeriodModal();
                 }}
               >
