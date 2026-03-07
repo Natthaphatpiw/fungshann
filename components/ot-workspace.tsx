@@ -42,6 +42,61 @@ function compareText(left: string, right: string) {
   return left.localeCompare(right, "th");
 }
 
+function formatThaiTime(isoDateTime: string) {
+  const date = new Date(isoDateTime);
+
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+
+  return date.toLocaleTimeString("th-TH", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Bangkok"
+  });
+}
+
+function buildDayHoverText(row: OTSummaryRow, dayKey: string) {
+  const sessions = row.daySessions[dayKey] || [];
+
+  if (sessions.length === 0) {
+    return "ไม่มีข้อมูลเวลาเข้า-ออก";
+  }
+
+  return sessions
+    .map(
+      (session, index) =>
+        `รอบ ${index + 1}: เข้า ${formatThaiTime(session.enteredAt)} ออก ${formatThaiTime(
+          session.exitedAt
+        )} (OT ${session.ot.toFixed(2)} ชม.)`
+    )
+    .join("\n");
+}
+
+function buildRowHoverText(row: OTSummaryRow) {
+  const entries = Object.entries(row.daySessions).filter(([, sessions]) => sessions.length > 0);
+
+  if (entries.length === 0) {
+    return "ไม่มีข้อมูลเวลาเข้า-ออก";
+  }
+
+  return entries
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([dayKey, sessions]) => {
+      const sessionText = sessions
+        .map(
+          (session) =>
+            `${formatThaiTime(session.enteredAt)}-${formatThaiTime(session.exitedAt)} (OT ${session.ot.toFixed(
+              2
+            )})`
+        )
+        .join(", ");
+      return `${dayKey}: ${sessionText}`;
+    })
+    .join("\n");
+}
+
 function sortRows(rows: OTSummaryRow[], sortKey: SortKey, sortDirection: SortDirection) {
   if (!sortKey) {
     return [...rows];
@@ -552,9 +607,15 @@ export function OtWorkspace() {
                         {isTableExpanded ? <td>{row.department || "-"}</td> : null}
                         {isTableExpanded ? <td>{row.position || "-"}</td> : null}
                         <td className="numeric strong">{row.workDays}</td>
-                        <td className="numeric">{row.ot1.toFixed(2)}</td>
-                        <td className="numeric">{row.ot2.toFixed(2)}</td>
-                        <td className="numeric">{row.ot3.toFixed(2)}</td>
+                        <td className="numeric" title={buildRowHoverText(row)}>
+                          {row.ot1.toFixed(2)}
+                        </td>
+                        <td className="numeric" title={buildRowHoverText(row)}>
+                          {row.ot2.toFixed(2)}
+                        </td>
+                        <td className="numeric" title={buildRowHoverText(row)}>
+                          {row.ot3.toFixed(2)}
+                        </td>
                         <td className="numeric strong">{formatCurrency(row.otPay)}</td>
                         {isTableExpanded ? (
                           <td className="numeric">{row.otPay1x5.toFixed(2)}</td>
@@ -572,6 +633,7 @@ export function OtWorkspace() {
                                   className={`day-chip ${
                                     row.dayTotals[day.key] > 0 ? "has-value" : ""
                                   }`}
+                                  title={buildDayHoverText(row, day.key)}
                                 >
                                   {row.dayTotals[day.key] > 0
                                     ? row.dayTotals[day.key].toFixed(2)

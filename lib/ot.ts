@@ -920,7 +920,8 @@ export async function buildOtSummary(
       otPay1x5: 0,
       otPay2x: 0,
       otPay3x: 0,
-      dayTotals: Object.fromEntries(days.map((day) => [day.key, 0]))
+      dayTotals: Object.fromEntries(days.map((day) => [day.key, 0])),
+      daySessions: Object.fromEntries(days.map((day) => [day.key, []]))
     });
   }
 
@@ -940,7 +941,8 @@ export async function buildOtSummary(
         otPay1x5: 0,
         otPay2x: 0,
         otPay3x: 0,
-        dayTotals: Object.fromEntries(days.map((day) => [day.key, 0]))
+        dayTotals: Object.fromEntries(days.map((day) => [day.key, 0])),
+        daySessions: Object.fromEntries(days.map((day) => [day.key, []]))
       });
     }
 
@@ -960,6 +962,14 @@ export async function buildOtSummary(
     row.dayTotals[record.workDate] = Number(
       ((row.dayTotals[record.workDate] || 0) + record.totalOt).toFixed(2)
     );
+    if (!row.daySessions[record.workDate]) {
+      row.daySessions[record.workDate] = [];
+    }
+    row.daySessions[record.workDate].push({
+      enteredAt: record.enteredAt,
+      exitedAt: record.exitedAt,
+      ot: Number(record.totalOt.toFixed(2))
+    });
   }
 
   const rows = [...rowsMap.values()].sort((left, right) =>

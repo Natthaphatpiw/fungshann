@@ -74,6 +74,14 @@ export interface OTSummaryRow {
   otPay2x: number;
   otPay3x: number;
   dayTotals: Record<string, number>;
+  daySessions: Record<
+    string,
+    Array<{
+      enteredAt: string;
+      exitedAt: string;
+      ot: number;
+    }>
+  >;
 }
 
 export interface OTSummaryResponse {
