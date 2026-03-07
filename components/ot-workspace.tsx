@@ -377,7 +377,7 @@ export function OtWorkspace() {
             <div className="eyebrow">Overtime Workflow</div>
             <h1>ชั่วโมง OT</h1>
             <p className="muted-text">
-              อัปโหลดไฟล์สแกนหน้าแบบ `.txt` ระบบจะกันข้อมูลซ้ำ, บันทึกสะสมลง `scan.csv`,
+              อัปโหลดไฟล์สแกนหน้าแบบ `.txt` ระบบจะกันข้อมูลซ้ำ, บันทึกสะสมลงฐานข้อมูล,
               คำนวณ OT จากข้อมูลสะสม และส่งออกเป็น Excel
             </p>
           </div>

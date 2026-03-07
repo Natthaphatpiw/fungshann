@@ -1,9 +1,7 @@
-import { promises as fs } from "node:fs";
-
 import { OFFICE_KEYWORDS, TRANSPORT_KEYWORDS } from "@/lib/constants";
-import { getOtStoragePath, getScanStoragePath, parseCsvFile, writeCsvFile } from "@/lib/csv";
 import { readEmployeeMap, readEmployees } from "@/lib/employees";
 import { buildPeriodLabel, enumeratePeriodDays, getPeriodRange, toIsoDate } from "@/lib/periods";
+import { chunkArray, fetchAllRows, getSupabaseAdmin } from "@/lib/supabase";
 import {
   EmployeeRecord,
   FactoryId,
@@ -14,35 +12,6 @@ import {
   RawScan,
   WorkSession
 } from "@/lib/types";
-
-const STORAGE_HEADERS = [
-  "workDate",
-  "employeeId",
-  "employeeName",
-  "department",
-  "position",
-  "factoryId",
-  "shiftCode",
-  "isSunday",
-  "enteredAt",
-  "exitedAt",
-  "ot1",
-  "ot2",
-  "ot3",
-  "totalOt",
-  "otPay",
-  "notes"
-];
-
-const SCAN_STORAGE_HEADERS = [
-  "โรงงาน",
-  "รหัสเครื่อง",
-  "วันที่แสกน",
-  "เวลาแสกน",
-  "รหัสพนักงาน",
-  "ประเภท",
-  "วันที่เวลาแสกน"
-];
 
 function roundDownHalfHour(hours: number): number {
   if (hours <= 0) {
@@ -113,24 +82,6 @@ function parseLogDate(dateLabel: string, timeLabel: string): Date | null {
   }
 
   return new Date(year, month - 1, day, hour, minute, Number.isNaN(second) ? 0 : second, 0);
-}
-
-function formatScanDate(date: Date): string {
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = String(date.getFullYear());
-  return `${day}-${month}-${year}`;
-}
-
-function formatScanTime(date: Date): string {
-  const hour = String(date.getHours()).padStart(2, "0");
-  const minute = String(date.getMinutes()).padStart(2, "0");
-  const second = String(date.getSeconds()).padStart(2, "0");
-  return `${hour}:${minute}:${second}`;
-}
-
-function getFactoryLabel(factoryId: FactoryId): string {
-  return factoryId === "factory1" ? "โรงงาน 1" : "โรงงาน 3";
 }
 
 function buildRawScanKey(factoryId: FactoryId, scan: RawScan): string {
@@ -583,105 +534,86 @@ export function parseBiometricLog(content: string): RawScan[] {
 }
 
 export async function loadStoredScans(factoryId?: FactoryId): Promise<RawScan[]> {
-  try {
-    const rows = await parseCsvFile(getScanStoragePath());
-
-    return rows
-      .filter((row) => {
-        const label = String(row["โรงงาน"] ?? "").trim();
-        if (!factoryId) {
-          return true;
-        }
-
-        if (!label) {
-          return factoryId === "factory1";
-        }
-
-        return label === getFactoryLabel(factoryId);
-      })
-      .map((row) => {
-        const isoValue = String(row["วันที่เวลาแสกน"] ?? "").trim();
-        const dateLabel = String(row["วันที่แสกน"] ?? "").trim();
-        const timeLabel = String(row["เวลาแสกน"] ?? "").trim();
-        const scannedAt =
-          (isoValue ? new Date(isoValue) : parseLogDate(dateLabel, timeLabel)) ?? new Date("");
-
-        return {
-          employeeId: String(row["รหัสพนักงาน"] ?? "").trim(),
-          machineCode: String(row["รหัสเครื่อง"] ?? "").trim(),
-          type: (String(row["ประเภท"] ?? "").trim() === "2" ? 2 : 1) as 1 | 2,
-          scannedAt
-        };
-      })
-      .filter(
-        (scan) =>
-          scan.employeeId.length > 0 &&
-          scan.machineCode.length > 0 &&
-          !Number.isNaN(scan.scannedAt.getTime())
-      )
-      .sort((left, right) => left.scannedAt.getTime() - right.scannedAt.getTime());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+  const scans = await fetchAllRows<{
+    factory_id: FactoryId;
+    machine_code: string;
+    scanned_at: string;
+    employee_id: string;
+    scan_type: number;
+  }>(
+    "hr_scan_events",
+    "factory_id,machine_code,scanned_at,employee_id,scan_type",
+    (query) => {
+      let scoped = query.order("scanned_at", { ascending: true });
+      if (factoryId) {
+        scoped = scoped.eq("factory_id", factoryId);
+      }
+      return scoped;
     }
+  );
 
-    throw error;
-  }
+  return scans
+    .map((scan) => ({
+      employeeId: String(scan.employee_id ?? "").trim(),
+      machineCode: String(scan.machine_code ?? "").trim(),
+      type: (Number(scan.scan_type) === 2 ? 2 : 1) as 1 | 2,
+      scannedAt: new Date(scan.scanned_at)
+    }))
+    .filter(
+      (scan) =>
+        scan.employeeId.length > 0 &&
+        scan.machineCode.length > 0 &&
+        !Number.isNaN(scan.scannedAt.getTime())
+    )
+    .sort((left, right) => left.scannedAt.getTime() - right.scannedAt.getTime());
 }
 
 export async function appendScansToStorage(
   factoryId: FactoryId,
   scans: RawScan[]
 ): Promise<{ addedCount: number; duplicateCount: number; totalCount: number }> {
-  let rows: Record<string, string>[] = [];
-
-  try {
-    rows = await parseCsvFile(getScanStoragePath());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  const normalisedRows = rows.map((row) => {
-    const dateLabel = String(row["วันที่แสกน"] ?? "").trim();
-    const timeLabel = String(row["เวลาแสกน"] ?? "").trim();
-    const isoValue = String(row["วันที่เวลาแสกน"] ?? "").trim();
-    const parsed = isoValue ? new Date(isoValue) : parseLogDate(dateLabel, timeLabel);
-
-    return {
-      โรงงาน: String(row["โรงงาน"] ?? "").trim(),
-      รหัสเครื่อง: String(row["รหัสเครื่อง"] ?? "").trim(),
-      วันที่แสกน: dateLabel,
-      เวลาแสกน: timeLabel,
-      รหัสพนักงาน: String(row["รหัสพนักงาน"] ?? "").trim(),
-      ประเภท: String(row["ประเภท"] ?? "").trim(),
-      วันที่เวลาแสกน:
-        parsed && !Number.isNaN(parsed.getTime())
-          ? parsed.toISOString()
-          : String(row["วันที่เวลาแสกน"] ?? "").trim()
-    };
-  });
-
+  const supabase = getSupabaseAdmin();
+  const existingRows = await fetchAllRows<{
+    machine_code: string;
+    scanned_at: string;
+    employee_id: string;
+    scan_type: number;
+  }>(
+    "hr_scan_events",
+    "machine_code,scanned_at,employee_id,scan_type",
+    (query) => query.eq("factory_id", factoryId)
+  );
   const existingKeys = new Set(
-    normalisedRows
-      .filter((row) => row["โรงงาน"] && row["รหัสเครื่อง"] && row["รหัสพนักงาน"] && row["วันที่เวลาแสกน"])
-      .map((row) =>
-        [
-          row["โรงงาน"] === "โรงงาน 3" ? "factory3" : "factory1",
-          row["รหัสพนักงาน"],
-          row["รหัสเครื่อง"],
-          row["ประเภท"] === "2" ? "2" : "1",
-          row["วันที่เวลาแสกน"]
-        ].join("|")
-      )
+    existingRows.map((row) =>
+      [
+        factoryId,
+        String(row.employee_id ?? "").trim(),
+        String(row.machine_code ?? "").trim(),
+        Number(row.scan_type) === 2 ? "2" : "1",
+        new Date(row.scanned_at).toISOString()
+      ].join("|")
+    )
   );
 
   let addedCount = 0;
   let duplicateCount = 0;
-  const factoryLabel = getFactoryLabel(factoryId);
+  const rowsToInsert: Array<{
+    factory_id: FactoryId;
+    machine_code: string;
+    scanned_at: string;
+    employee_id: string;
+    scan_type: 1 | 2;
+  }> = [];
 
   for (const scan of scans) {
+    if (
+      !scan.employeeId.trim() ||
+      !scan.machineCode.trim() ||
+      Number.isNaN(scan.scannedAt.getTime())
+    ) {
+      continue;
+    }
+
     const key = buildRawScanKey(factoryId, scan);
 
     if (existingKeys.has(key)) {
@@ -690,30 +622,40 @@ export async function appendScansToStorage(
     }
 
     existingKeys.add(key);
-    normalisedRows.push({
-      โรงงาน: factoryLabel,
-      รหัสเครื่อง: scan.machineCode,
-      วันที่แสกน: formatScanDate(scan.scannedAt),
-      เวลาแสกน: formatScanTime(scan.scannedAt),
-      รหัสพนักงาน: scan.employeeId,
-      ประเภท: String(scan.type),
-      วันที่เวลาแสกน: scan.scannedAt.toISOString()
+    rowsToInsert.push({
+      factory_id: factoryId,
+      machine_code: scan.machineCode.trim(),
+      scanned_at: scan.scannedAt.toISOString(),
+      employee_id: scan.employeeId.trim(),
+      scan_type: scan.type
     });
     addedCount += 1;
   }
 
-  normalisedRows.sort((left, right) => {
-    const leftDate = new Date(left["วันที่เวลาแสกน"]).getTime();
-    const rightDate = new Date(right["วันที่เวลาแสกน"]).getTime();
-    return leftDate - rightDate;
-  });
+  for (const chunk of chunkArray(rowsToInsert, 500)) {
+    const { error } = await supabase.from("hr_scan_events").upsert(chunk, {
+      onConflict: "factory_id,machine_code,scanned_at,employee_id,scan_type",
+      ignoreDuplicates: true
+    });
 
-  await writeCsvFile(getScanStoragePath(), SCAN_STORAGE_HEADERS, normalisedRows);
+    if (error) {
+      throw new Error(`[hr_scan_events] ${error.message}`);
+    }
+  }
+
+  const { count, error: countError } = await supabase
+    .from("hr_scan_events")
+    .select("*", { head: true, count: "exact" })
+    .eq("factory_id", factoryId);
+
+  if (countError) {
+    throw new Error(`[hr_scan_events] ${countError.message}`);
+  }
 
   return {
     addedCount,
     duplicateCount,
-    totalCount: normalisedRows.length
+    totalCount: count ?? 0
   };
 }
 
@@ -844,54 +786,104 @@ export async function computeOtRecords(factoryId: FactoryId, content: string): P
 }
 
 export async function saveOtRecords(factoryId: FactoryId, records: OTDailyRecord[]): Promise<void> {
-  await writeCsvFile(
-    getOtStoragePath(factoryId),
-    STORAGE_HEADERS,
-    records.map((record) => ({
-      ...record
-    }))
-  );
+  const supabase = getSupabaseAdmin();
+
+  const { error: deleteError } = await supabase.from("hr_ot_daily").delete().eq("factory_id", factoryId);
+
+  if (deleteError) {
+    throw new Error(`[hr_ot_daily] ${deleteError.message}`);
+  }
+
+  const payload = records.map((record) => ({
+    factory_id: factoryId,
+    work_date: record.workDate,
+    employee_id: record.employeeId,
+    employee_name: record.employeeName,
+    department: record.department,
+    position: record.position,
+    shift_code: record.shiftCode,
+    is_sunday: record.isSunday,
+    entered_at: record.enteredAt,
+    exited_at: record.exitedAt,
+    ot1: Number(record.ot1.toFixed(2)),
+    ot2: Number(record.ot2.toFixed(2)),
+    ot3: Number(record.ot3.toFixed(2)),
+    total_ot: Number(record.totalOt.toFixed(2)),
+    ot_pay: Number(record.otPay.toFixed(2)),
+    notes: record.notes
+  }));
+
+  for (const chunk of chunkArray(payload, 500)) {
+    const { error } = await supabase.from("hr_ot_daily").insert(chunk);
+
+    if (error) {
+      throw new Error(`[hr_ot_daily] ${error.message}`);
+    }
+  }
 }
 
 export async function loadOtRecords(factoryId: FactoryId): Promise<OTDailyRecord[]> {
-  try {
-    const rows = await parseCsvFile(getOtStoragePath(factoryId));
-    return rows.map((row) => ({
-      workDate: row.workDate,
-      employeeId: row.employeeId,
-      employeeName: row.employeeName,
-      department: row.department,
-      position: row.position,
-      factoryId,
-      shiftCode: (row.shiftCode as OTDailyRecord["shiftCode"]) || "day",
-      isSunday: row.isSunday === "true",
-      enteredAt: row.enteredAt,
-      exitedAt: row.exitedAt,
-      ot1: Number(row.ot1 || 0),
-      ot2: Number(row.ot2 || 0),
-      ot3: Number(row.ot3 || 0),
-      totalOt: Number(row.totalOt || 0),
-      otPay: Number(row.otPay || 0),
-      notes: row.notes || ""
-    }));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
+  const rows = await fetchAllRows<{
+    work_date: string;
+    employee_id: string;
+    employee_name: string;
+    department: string;
+    position: string;
+    shift_code: OTDailyRecord["shiftCode"];
+    is_sunday: boolean;
+    entered_at: string;
+    exited_at: string;
+    ot1: number;
+    ot2: number;
+    ot3: number;
+    total_ot: number;
+    ot_pay: number;
+    notes: string | null;
+  }>(
+    "hr_ot_daily",
+    "work_date,employee_id,employee_name,department,position,shift_code,is_sunday,entered_at,exited_at,ot1,ot2,ot3,total_ot,ot_pay,notes",
+    (query) =>
+      query
+        .eq("factory_id", factoryId)
+        .order("work_date", { ascending: true })
+        .order("entered_at", { ascending: true })
+  );
+
+  return rows.map((row) => ({
+    workDate: String(row.work_date ?? ""),
+    employeeId: String(row.employee_id ?? ""),
+    employeeName: String(row.employee_name ?? ""),
+    department: String(row.department ?? ""),
+    position: String(row.position ?? ""),
+    factoryId,
+    shiftCode: row.shift_code || "day",
+    isSunday: Boolean(row.is_sunday),
+    enteredAt: String(row.entered_at ?? ""),
+    exitedAt: String(row.exited_at ?? ""),
+    ot1: Number(row.ot1 || 0),
+    ot2: Number(row.ot2 || 0),
+    ot3: Number(row.ot3 || 0),
+    totalOt: Number(row.total_ot || 0),
+    otPay: Number(row.ot_pay || 0),
+    notes: String(row.notes ?? "")
+  }));
 }
 
 export async function getOtLastUpdatedAt(factoryId: FactoryId): Promise<string | null> {
-  try {
-    const stat = await fs.stat(getOtStoragePath(factoryId));
-    return stat.mtime.toISOString();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("hr_ot_daily")
+    .select("updated_at")
+    .eq("factory_id", factoryId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ updated_at: string | null }>();
+
+  if (error) {
+    throw new Error(`[hr_ot_daily] ${error.message}`);
   }
+
+  return data?.updated_at ?? null;
 }
 
 export async function buildOtSummary(

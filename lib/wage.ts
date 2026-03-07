@@ -1,7 +1,12 @@
-import { getEmployeeCsvPath, getWageStoragePath, parseCsvFile, readCsvHeaders, writeCsvFile } from "@/lib/csv";
+import {
+  readEmployeeHeaders,
+  readEmployeeRows,
+  readEmployees,
+  writeEmployeeRows
+} from "@/lib/employees";
 import { loadOtRecords } from "@/lib/ot";
 import { getPeriodRange, toIsoDate } from "@/lib/periods";
-import { readEmployees } from "@/lib/employees";
+import { chunkArray, fetchAllRows, getSupabaseAdmin } from "@/lib/supabase";
 import { FactoryId, PeriodSelection } from "@/lib/types";
 
 const WAGE_REQUIRED_HEADERS = [
@@ -99,6 +104,14 @@ const MANUAL_SPECIAL_COLUMNS = [
   "หักค่าอื่นๆ"
 ] as const;
 
+type WageCsvRow = Record<string, string>;
+
+interface WageDbRow {
+  pay_date: string;
+  seq_no: number;
+  row_data: Record<string, unknown> | null;
+}
+
 function parseFlexibleNumber(value: string): number {
   const trimmed = String(value ?? "").trim();
   if (!trimmed) {
@@ -190,68 +203,29 @@ function minutesBetween(start: Date, end: Date): number {
   return Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
 }
 
-type WageCsvRow = Record<string, string>;
+function normaliseWageRow(headers: string[], rowData: Record<string, unknown>): WageCsvRow {
+  return Object.fromEntries(headers.map((header) => [header, String(rowData[header] ?? "")]));
+}
 
 export async function ensureWageHeaders(): Promise<string[]> {
-  let headers: string[] = [];
-  const filePath = getWageStoragePath();
-
-  try {
-    headers = await readCsvHeaders(filePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  const finalHeaders = [...headers];
-  for (const requiredHeader of WAGE_REQUIRED_HEADERS) {
-    if (!finalHeaders.includes(requiredHeader)) {
-      finalHeaders.push(requiredHeader);
-    }
-  }
-
-  if (headers.length === 0) {
-    await writeCsvFile(filePath, finalHeaders, []);
-    return finalHeaders;
-  }
-
-  if (finalHeaders.length !== headers.length) {
-    const rows = await parseCsvFile(filePath);
-    const normalised = rows.map((row) =>
-      Object.fromEntries(finalHeaders.map((header) => [header, String(row[header] ?? "")]))
-    );
-    await writeCsvFile(filePath, finalHeaders, normalised);
-  }
-
-  return finalHeaders;
+  return [...WAGE_REQUIRED_HEADERS];
 }
 
 export async function readWageRows(): Promise<{ headers: string[]; rows: WageCsvRow[] }> {
   const headers = await ensureWageHeaders();
-
-  try {
-    const rows = await parseCsvFile(getWageStoragePath());
-    return {
-      headers,
-      rows: rows.map((row) =>
-        Object.fromEntries(headers.map((header) => [header, String(row[header] ?? "")]))
-      )
-    };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { headers, rows: [] };
-    }
-
-    throw error;
-  }
-}
-
-async function writeWageRows(headers: string[], rows: WageCsvRow[]): Promise<void> {
-  const normalised = rows.map((row) =>
-    Object.fromEntries(headers.map((header) => [header, String(row[header] ?? "")]))
+  const dbRows = await fetchAllRows<WageDbRow>(
+    "hr_wages",
+    "pay_date,seq_no,row_data",
+    (query) =>
+      query
+        .order("pay_date", { ascending: true })
+        .order("seq_no", { ascending: true })
   );
-  await writeCsvFile(getWageStoragePath(), headers, normalised);
+
+  return {
+    headers,
+    rows: dbRows.map((row) => normaliseWageRow(headers, row.row_data ?? {}))
+  };
 }
 
 export async function checkOtCompletenessForPeriod(
@@ -323,18 +297,23 @@ export async function findWageRowsForPeriod(
   factoryId: FactoryId,
   selection: PeriodSelection
 ): Promise<{ headers: string[]; rows: WageCsvRow[]; payDate: string }> {
-  const { headers, rows } = await readWageRows();
+  const headers = await ensureWageHeaders();
   const payDate = getPayDateKey(selection);
-  const factoryLabel = getFactoryLabel(factoryId);
+  const dbRows = await fetchAllRows<WageDbRow>(
+    "hr_wages",
+    "pay_date,seq_no,row_data",
+    (query) =>
+      query
+        .eq("factory_id", factoryId)
+        .eq("pay_date", payDate)
+        .order("seq_no", { ascending: true })
+  );
 
-  const filtered = rows.filter((row) => {
-    const payDateValue = String(row["งวดวันที่จ่าย"] ?? "").trim();
-    const rowFactory = String(row["โรงงาน"] ?? "").trim();
-    const factoryMatched = rowFactory ? rowFactory === factoryLabel : factoryId === "factory1";
-    return payDateValue === payDate && factoryMatched;
-  });
-
-  return { headers, rows: filtered, payDate };
+  return {
+    headers,
+    rows: dbRows.map((row) => normaliseWageRow(headers, row.row_data ?? {})),
+    payDate
+  };
 }
 
 export async function calculateWageForPeriod(
@@ -365,7 +344,7 @@ export async function calculateWageForPeriod(
     };
   }
 
-  const { headers, rows: allRows } = await readWageRows();
+  const headers = await ensureWageHeaders();
   const employees = await readEmployees(factoryId);
   const records = await loadOtRecords(factoryId);
   const { start, end } = getPeriodRange(selection);
@@ -563,8 +542,29 @@ export async function calculateWageForPeriod(
     return Object.fromEntries(headers.map((header) => [header, String(row[header] ?? "")]));
   });
 
-  const nextAllRows = [...allRows, ...nextRows];
-  await writeWageRows(headers, nextAllRows);
+  const supabase = getSupabaseAdmin();
+  const payload = nextRows.map((row, index) => ({
+    factory_id: factoryId,
+    pay_date: payDate,
+    period_no: selection.period,
+    period_month: selection.month,
+    period_year: selection.year,
+    period_start: periodStart,
+    period_end: periodEnd,
+    employee_id: String(row["รหัสพนักงาน"] ?? ""),
+    seq_no: index + 1,
+    row_data: row
+  }));
+
+  for (const chunk of chunkArray(payload, 500)) {
+    const { error } = await supabase.from("hr_wages").upsert(chunk, {
+      onConflict: "factory_id,pay_date,employee_id"
+    });
+
+    if (error) {
+      throw new Error(`[hr_wages] ${error.message}`);
+    }
+  }
 
   return {
     created: true,
@@ -601,8 +601,7 @@ export async function getWageStatusForPeriod(
 }
 
 export async function ensureEmployeeHasPayrollColumns(factoryId: FactoryId): Promise<void> {
-  const employeePath = getEmployeeCsvPath(factoryId);
-  const headers = await readCsvHeaders(employeePath);
+  const headers = await readEmployeeHeaders(factoryId);
   const missing = MANUAL_SPECIAL_COLUMNS.filter((column) => !headers.includes(column));
 
   if (missing.length === 0) {
@@ -610,10 +609,10 @@ export async function ensureEmployeeHasPayrollColumns(factoryId: FactoryId): Pro
   }
 
   const nextHeaders = [...headers, ...missing];
-  const rows = await parseCsvFile(employeePath);
+  const rows = await readEmployeeRows(factoryId);
   const normalised = rows.map((row) =>
     Object.fromEntries(nextHeaders.map((header) => [header, String(row[header] ?? "")]))
   );
 
-  await writeCsvFile(employeePath, nextHeaders, normalised);
+  await writeEmployeeRows(factoryId, normalised, nextHeaders);
 }

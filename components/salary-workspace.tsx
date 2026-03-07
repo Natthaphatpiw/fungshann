@@ -261,7 +261,7 @@ export function SalaryWorkspace() {
               <strong>{isTableExpanded ? "โหมดขยายตาราง" : "โหมดกะทัดรัด"}</strong>
               <span>
                 {isTableExpanded
-                  ? "แสดงข้อมูลทุกคอลัมม์ที่อยู่ในไฟล์ wage.csv ของงวดที่เลือก"
+                  ? "แสดงข้อมูลทุกคอลัมม์ของงวดที่เลือกจากฐานข้อมูล"
                   : "แสดงคอลัมม์หลักให้พอดีกับหน้าจอ"}
               </span>
             </div>
