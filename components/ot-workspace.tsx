@@ -49,11 +49,13 @@ function formatThaiTime(isoDateTime: string) {
     return "-";
   }
 
+  // Scan timestamps are persisted as UTC-normalised values from server parsing.
+  // Showing as UTC keeps the same wall-clock time as the source attendance file.
   return date.toLocaleTimeString("th-TH", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-    timeZone: "Asia/Bangkok"
+    timeZone: "UTC"
   });
 }
 
