@@ -26,13 +26,13 @@ export async function GET(request: Request) {
     "แผนก",
     "ตำแหน่ง",
     "จำนวนวันที่ทำงาน",
-    "OT 1.5",
-    "OT 2",
-    "OT 3",
-    "มูลค่า OT",
-    "OT 1.5 (x1.5)",
-    "OT 2 (x2)",
-    "OT 3 (x3)",
+    "OT 1.5 หลังเลิกงาน",
+    "OT 2 หลังเลิกงาน",
+    "OT 3 หลังเลิกงาน",
+    "มูลค่า OT หลังเลิกงาน",
+    "OT 1.5 หลัง (x1.5)",
+    "OT 2 หลัง (x2)",
+    "OT 3 หลัง (x3)",
     ...summary.days.map((day) => `${day.dayNumber} ${day.weekdayShort}`)
   ];
 

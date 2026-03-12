@@ -38,6 +38,14 @@ export interface OTDailyRecord {
   isSunday: boolean;
   enteredAt: string;
   exitedAt: string;
+  ot1Before: number;
+  ot1After: number;
+  ot2Before: number;
+  ot2After: number;
+  ot3Before: number;
+  ot3After: number;
+  totalOtBefore: number;
+  totalOtAfter: number;
   ot1: number;
   ot2: number;
   ot3: number;
@@ -79,7 +87,9 @@ export interface OTSummaryRow {
     Array<{
       enteredAt: string;
       exitedAt: string;
-      ot: number;
+      otBefore: number;
+      otAfter: number;
+      otTotal: number;
     }>
   >;
 }

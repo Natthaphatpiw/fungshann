@@ -372,7 +372,8 @@ function getShiftProfile(
 }
 
 function computeRegularOt(session: WorkSession, profile: ReturnType<typeof getShiftProfile>): {
-  ot1: number;
+  ot1Before: number;
+  ot1After: number;
   notes: string;
 } {
   const preMinutes = overlapMinutes(
@@ -401,14 +402,14 @@ function computeRegularOt(session: WorkSession, profile: ReturnType<typeof getSh
     session.enteredAt.getFullYear() !== session.exitedAt.getFullYear() ||
     session.enteredAt.getMonth() !== session.exitedAt.getMonth() ||
     session.enteredAt.getDate() !== session.exitedAt.getDate();
-  const hours =
+  const ot1Before = roundDownHalfHour(preMinutes / 60);
+  const ot1After =
     isTransportShift && crossesMidnight
-      ? Number(
-          (
-            roundDownHalfHour(preMinutes / 60) + Math.floor(safePostMinutes / 60)
-          ).toFixed(2)
-        )
-      : roundDownHalfHour((preMinutes + safePostMinutes) / 60);
+      ? Math.max(0, Math.floor(safePostMinutes / 60))
+      : Math.max(
+          0,
+          Number((roundDownHalfHour((preMinutes + safePostMinutes) / 60) - ot1Before).toFixed(2))
+        );
   const notes: string[] = [];
 
   if (preMinutes > 0) {
@@ -418,12 +419,14 @@ function computeRegularOt(session: WorkSession, profile: ReturnType<typeof getSh
     notes.push("มี OT หลังเลิกงาน");
   }
 
-  return { ot1: hours, notes: notes.join(", ") };
+  return { ot1Before, ot1After, notes: notes.join(", ") };
 }
 
 function computeSundayOt(session: WorkSession, profile: ReturnType<typeof getShiftProfile>): {
-  ot2: number;
-  ot3: number;
+  ot2Before: number;
+  ot2After: number;
+  ot3Before: number;
+  ot3After: number;
   notes: string;
 } {
   let ot2Minutes = 0;
@@ -479,9 +482,14 @@ function computeSundayOt(session: WorkSession, profile: ReturnType<typeof getShi
     }
   }
 
+  const ot2 = roundDownHalfHour(ot2Minutes / 60);
+  const ot3 = roundDownHalfHour(Math.max(0, ot3Minutes) / 60);
+
   return {
-    ot2: roundDownHalfHour(ot2Minutes / 60),
-    ot3: roundDownHalfHour(Math.max(0, ot3Minutes) / 60),
+    ot2Before: 0,
+    ot2After: ot2,
+    ot3Before: 0,
+    ot3After: ot3,
     notes: "คำนวณ OT วันอาทิตย์"
   };
 }
@@ -751,23 +759,35 @@ export async function computeOtRecordsFromScans(
 
     previousByEmployee.set(session.employeeId, session);
 
-    let ot1 = 0;
-    let ot2 = 0;
-    let ot3 = 0;
+    let ot1Before = 0;
+    let ot1After = 0;
+    let ot2Before = 0;
+    let ot2After = 0;
+    let ot3Before = 0;
+    let ot3After = 0;
     let notes = "";
 
     if (isSunday) {
       const sundayOt = computeSundayOt(session, profile);
-      ot2 = sundayOt.ot2;
-      ot3 = sundayOt.ot3;
+      ot2Before = sundayOt.ot2Before;
+      ot2After = sundayOt.ot2After;
+      ot3Before = sundayOt.ot3Before;
+      ot3After = sundayOt.ot3After;
       notes = sundayOt.notes;
     } else {
       const regularOt = computeRegularOt(session, profile);
-      ot1 = regularOt.ot1;
+      ot1Before = regularOt.ot1Before;
+      ot1After = regularOt.ot1After;
       notes = regularOt.notes;
     }
 
-    const otPay = calculateOtPay(employee, ot1, ot2, ot3);
+    const ot1 = ot1After;
+    const ot2 = ot2After;
+    const ot3 = ot3After;
+    const totalOtBefore = Number((ot1Before + ot2Before + ot3Before).toFixed(2));
+    const totalOtAfter = Number((ot1After + ot2After + ot3After).toFixed(2));
+    const totalOt = totalOtAfter;
+    const otPay = calculateOtPay(employee, ot1After, ot2After, ot3After);
 
     return {
       workDate: toIsoDate(session.enteredAt),
@@ -780,10 +800,18 @@ export async function computeOtRecordsFromScans(
       isSunday,
       enteredAt: session.enteredAt.toISOString(),
       exitedAt: session.exitedAt.toISOString(),
+      ot1Before,
+      ot1After,
+      ot2Before,
+      ot2After,
+      ot3Before,
+      ot3After,
+      totalOtBefore,
+      totalOtAfter,
       ot1,
       ot2,
       ot3,
-      totalOt: Number((ot1 + ot2 + ot3).toFixed(2)),
+      totalOt,
       otPay,
       notes
     };
@@ -814,6 +842,14 @@ export async function saveOtRecords(factoryId: FactoryId, records: OTDailyRecord
     is_sunday: record.isSunday,
     entered_at: record.enteredAt,
     exited_at: record.exitedAt,
+    ot1_before: Number(record.ot1Before.toFixed(2)),
+    ot1_after: Number(record.ot1After.toFixed(2)),
+    ot2_before: Number(record.ot2Before.toFixed(2)),
+    ot2_after: Number(record.ot2After.toFixed(2)),
+    ot3_before: Number(record.ot3Before.toFixed(2)),
+    ot3_after: Number(record.ot3After.toFixed(2)),
+    total_ot_before: Number(record.totalOtBefore.toFixed(2)),
+    total_ot_after: Number(record.totalOtAfter.toFixed(2)),
     ot1: Number(record.ot1.toFixed(2)),
     ot2: Number(record.ot2.toFixed(2)),
     ot3: Number(record.ot3.toFixed(2)),
@@ -842,6 +878,14 @@ export async function loadOtRecords(factoryId: FactoryId): Promise<OTDailyRecord
     is_sunday: boolean;
     entered_at: string;
     exited_at: string;
+    ot1_before: number;
+    ot1_after: number;
+    ot2_before: number;
+    ot2_after: number;
+    ot3_before: number;
+    ot3_after: number;
+    total_ot_before: number;
+    total_ot_after: number;
     ot1: number;
     ot2: number;
     ot3: number;
@@ -850,7 +894,7 @@ export async function loadOtRecords(factoryId: FactoryId): Promise<OTDailyRecord
     notes: string | null;
   }>(
     "hr_ot_daily",
-    "work_date,employee_id,employee_name,department,position,shift_code,is_sunday,entered_at,exited_at,ot1,ot2,ot3,total_ot,ot_pay,notes",
+    "work_date,employee_id,employee_name,department,position,shift_code,is_sunday,entered_at,exited_at,ot1_before,ot1_after,ot2_before,ot2_after,ot3_before,ot3_after,total_ot_before,total_ot_after,ot1,ot2,ot3,total_ot,ot_pay,notes",
     (query) =>
       query
         .eq("factory_id", factoryId)
@@ -869,11 +913,19 @@ export async function loadOtRecords(factoryId: FactoryId): Promise<OTDailyRecord
     isSunday: Boolean(row.is_sunday),
     enteredAt: String(row.entered_at ?? ""),
     exitedAt: String(row.exited_at ?? ""),
-    ot1: Number(row.ot1 || 0),
-    ot2: Number(row.ot2 || 0),
-    ot3: Number(row.ot3 || 0),
-    totalOt: Number(row.total_ot || 0),
-    otPay: Number(row.ot_pay || 0),
+    ot1Before: Number(row.ot1_before ?? 0),
+    ot1After: Number(row.ot1_after ?? row.ot1 ?? 0),
+    ot2Before: Number(row.ot2_before ?? 0),
+    ot2After: Number(row.ot2_after ?? row.ot2 ?? 0),
+    ot3Before: Number(row.ot3_before ?? 0),
+    ot3After: Number(row.ot3_after ?? row.ot3 ?? 0),
+    totalOtBefore: Number(row.total_ot_before ?? 0),
+    totalOtAfter: Number(row.total_ot_after ?? row.total_ot ?? 0),
+    ot1: Number(row.ot1_after ?? row.ot1 ?? 0),
+    ot2: Number(row.ot2_after ?? row.ot2 ?? 0),
+    ot3: Number(row.ot3_after ?? row.ot3 ?? 0),
+    totalOt: Number(row.total_ot_after ?? row.total_ot ?? 0),
+    otPay: Number(row.ot_pay ?? 0),
     notes: String(row.notes ?? "")
   }));
 }
@@ -977,7 +1029,9 @@ export async function buildOtSummary(
     row.daySessions[record.workDate].push({
       enteredAt: record.enteredAt,
       exitedAt: record.exitedAt,
-      ot: Number(record.totalOt.toFixed(2))
+      otBefore: Number(record.totalOtBefore.toFixed(2)),
+      otAfter: Number(record.totalOtAfter.toFixed(2)),
+      otTotal: Number((record.totalOtBefore + record.totalOtAfter).toFixed(2))
     });
   }
 

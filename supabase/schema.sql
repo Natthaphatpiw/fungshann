@@ -65,6 +65,14 @@ create table if not exists public.hr_ot_daily (
   is_sunday boolean not null default false,
   entered_at timestamptz not null,
   exited_at timestamptz not null,
+  ot1_before numeric(10,2) not null default 0,
+  ot1_after numeric(10,2) not null default 0,
+  ot2_before numeric(10,2) not null default 0,
+  ot2_after numeric(10,2) not null default 0,
+  ot3_before numeric(10,2) not null default 0,
+  ot3_after numeric(10,2) not null default 0,
+  total_ot_before numeric(10,2) not null default 0,
+  total_ot_after numeric(10,2) not null default 0,
   ot1 numeric(10,2) not null default 0,
   ot2 numeric(10,2) not null default 0,
   ot3 numeric(10,2) not null default 0,
@@ -75,6 +83,16 @@ create table if not exists public.hr_ot_daily (
   updated_at timestamptz not null default now(),
   unique (factory_id, work_date, employee_id, entered_at, exited_at)
 );
+
+alter table public.hr_ot_daily
+  add column if not exists ot1_before numeric(10,2) not null default 0,
+  add column if not exists ot1_after numeric(10,2) not null default 0,
+  add column if not exists ot2_before numeric(10,2) not null default 0,
+  add column if not exists ot2_after numeric(10,2) not null default 0,
+  add column if not exists ot3_before numeric(10,2) not null default 0,
+  add column if not exists ot3_after numeric(10,2) not null default 0,
+  add column if not exists total_ot_before numeric(10,2) not null default 0,
+  add column if not exists total_ot_after numeric(10,2) not null default 0;
 
 create index if not exists hr_ot_daily_factory_workdate_idx
   on public.hr_ot_daily (factory_id, work_date);

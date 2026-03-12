@@ -391,9 +391,9 @@ export async function calculateWageForPeriod(
     daySummaryByEmployee.set(record.employeeId, employeeDays);
 
     const totals = otTotalsByEmployee.get(record.employeeId) ?? { ot1: 0, ot2: 0, ot3: 0 };
-    totals.ot1 = Number((totals.ot1 + record.ot1).toFixed(2));
-    totals.ot2 = Number((totals.ot2 + record.ot2).toFixed(2));
-    totals.ot3 = Number((totals.ot3 + record.ot3).toFixed(2));
+    totals.ot1 = Number((totals.ot1 + record.ot1After).toFixed(2));
+    totals.ot2 = Number((totals.ot2 + record.ot2After).toFixed(2));
+    totals.ot3 = Number((totals.ot3 + record.ot3After).toFixed(2));
     otTotalsByEmployee.set(record.employeeId, totals);
   }
 

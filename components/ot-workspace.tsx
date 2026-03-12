@@ -71,7 +71,9 @@ function buildDayHoverText(row: OTSummaryRow, dayKey: string) {
       (session, index) =>
         `รอบ ${index + 1}: เข้า ${formatThaiTime(session.enteredAt)} ออก ${formatThaiTime(
           session.exitedAt
-        )} (OT ${session.ot.toFixed(2)} ชม.)`
+        )} (OT หลัง ${session.otAfter.toFixed(2)} ชม.${
+          session.otBefore > 0 ? ` | ก่อน ${session.otBefore.toFixed(2)} ชม.` : ""
+        })`
     )
     .join("\n");
 }
@@ -89,9 +91,9 @@ function buildRowHoverText(row: OTSummaryRow) {
       const sessionText = sessions
         .map(
           (session) =>
-            `${formatThaiTime(session.enteredAt)}-${formatThaiTime(session.exitedAt)} (OT ${session.ot.toFixed(
+            `${formatThaiTime(session.enteredAt)}-${formatThaiTime(session.exitedAt)} (หลัง ${session.otAfter.toFixed(
               2
-            )})`
+            )}${session.otBefore > 0 ? ` | ก่อน ${session.otBefore.toFixed(2)}` : ""})`
         )
         .join(", ");
       return `${dayKey}: ${sessionText}`;
@@ -435,7 +437,7 @@ export function OtWorkspace() {
             <h1>ชั่วโมง OT</h1>
             <p className="muted-text">
               อัปโหลดไฟล์สแกนหน้าแบบ `.txt` ระบบจะกันข้อมูลซ้ำ, บันทึกสะสมลงฐานข้อมูล,
-              คำนวณ OT จากข้อมูลสะสม และส่งออกเป็น Excel
+              คำนวณ OT จากข้อมูลสะสม (แยก OT ก่อนเข้างาน/หลังเลิกงาน) และแสดงตารางเฉพาะ OT หลังเลิกงาน
             </p>
           </div>
         </div>
@@ -499,19 +501,19 @@ export function OtWorkspace() {
             <strong>{summary ? String(summary.totals.workDays) : "0"}</strong>
           </div>
           <div className="metric-card">
-            <span>รวม OT</span>
+            <span>รวม OT หลังเลิกงาน</span>
             <strong>{summary?.totals.totalOt.toFixed(2) || "0.00"}</strong>
           </div>
           <div className="metric-card">
-            <span>OT 1.5</span>
+            <span>OT 1.5 หลังเลิกงาน</span>
             <strong>{summary?.totals.ot1.toFixed(2) || "0.00"}</strong>
           </div>
           <div className="metric-card">
-            <span>OT 2.0</span>
+            <span>OT 2.0 หลังเลิกงาน</span>
             <strong>{summary?.totals.ot2.toFixed(2) || "0.00"}</strong>
           </div>
           <div className="metric-card">
-            <span>OT 3.0</span>
+            <span>OT 3.0 หลังเลิกงาน</span>
             <strong>{summary?.totals.ot3.toFixed(2) || "0.00"}</strong>
           </div>
           <div className="metric-card">
@@ -584,13 +586,13 @@ export function OtWorkspace() {
                     {isTableExpanded ? <th>{renderSortButton("แผนก", "department")}</th> : null}
                     {isTableExpanded ? <th>{renderSortButton("ตำแหน่ง", "position")}</th> : null}
                     <th>{renderSortButton("วันทำงาน", "workDays")}</th>
-                    <th>{renderSortButton("OT 1.5", "ot1")}</th>
-                    <th>{renderSortButton("OT 2", "ot2")}</th>
-                    <th>{renderSortButton("OT 3", "ot3")}</th>
+                    <th>{renderSortButton("OT 1.5 หลัง", "ot1")}</th>
+                    <th>{renderSortButton("OT 2 หลัง", "ot2")}</th>
+                    <th>{renderSortButton("OT 3 หลัง", "ot3")}</th>
                     <th>{renderSortButton("มูลค่า OT", "otPay")}</th>
-                    {isTableExpanded ? <th>{renderSortButton("OT 1.5 (x1.5)", "otPay1x5")}</th> : null}
-                    {isTableExpanded ? <th>{renderSortButton("OT 2 (x2)", "otPay2x")}</th> : null}
-                    {isTableExpanded ? <th>{renderSortButton("OT 3 (x3)", "otPay3x")}</th> : null}
+                    {isTableExpanded ? <th>{renderSortButton("OT 1.5 หลัง (x1.5)", "otPay1x5")}</th> : null}
+                    {isTableExpanded ? <th>{renderSortButton("OT 2 หลัง (x2)", "otPay2x")}</th> : null}
+                    {isTableExpanded ? <th>{renderSortButton("OT 3 หลัง (x3)", "otPay3x")}</th> : null}
                     {isTableExpanded
                       ? summary.days.map((day) => (
                           <th key={day.key}>
