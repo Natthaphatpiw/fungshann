@@ -98,6 +98,14 @@ function isKeywordMatch(text: string, keywords: string[]): boolean {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
+function isSameCalendarDate(left: Date, right: Date): boolean {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
 function getShiftProfile(
   employee: EmployeeRecord | undefined,
   enteredAt: Date,
@@ -217,18 +225,19 @@ function getShiftProfile(
   }
 
   if (isKeywordMatch(department, TRANSPORT_KEYWORDS)) {
+    const currentCalendarDay = new Date(enteredAt);
+    currentCalendarDay.setHours(0, 0, 0, 0);
     const previousCalendarDay = new Date(enteredAt);
     previousCalendarDay.setHours(0, 0, 0, 0);
     previousCalendarDay.setDate(previousCalendarDay.getDate() - 1);
     const lateExitHour =
       previousSession &&
-      previousSession.exitedAt.getFullYear() === previousCalendarDay.getFullYear() &&
-      previousSession.exitedAt.getMonth() === previousCalendarDay.getMonth() &&
-      previousSession.exitedAt.getDate() === previousCalendarDay.getDate()
+      isSameCalendarDate(previousSession.enteredAt, previousCalendarDay) &&
+      isSameCalendarDate(previousSession.exitedAt, currentCalendarDay)
         ? previousSession.exitedAt.getHours() + previousSession.exitedAt.getMinutes() / 60
         : null;
 
-    if (lateExitHour !== null && lateExitHour >= 2) {
+    if (lateExitHour !== null && lateExitHour >= 2 && lateExitHour < 12) {
       scheduledStart.setHours(12, 0, 0, 0);
       return {
         shiftCode: "transport12",
@@ -273,7 +282,7 @@ function getShiftProfile(
       };
     }
 
-    if (lateExitHour !== null && lateExitHour >= 0) {
+    if (lateExitHour !== null && lateExitHour >= 0 && lateExitHour < 2) {
       scheduledStart.setHours(10, 0, 0, 0);
       return {
         shiftCode: "transport10",
