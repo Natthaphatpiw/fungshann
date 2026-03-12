@@ -406,10 +406,7 @@ function computeRegularOt(session: WorkSession, profile: ReturnType<typeof getSh
   const ot1After =
     isTransportShift && crossesMidnight
       ? Math.max(0, Math.floor(safePostMinutes / 60))
-      : Math.max(
-          0,
-          Number((roundDownHalfHour((preMinutes + safePostMinutes) / 60) - ot1Before).toFixed(2))
-        );
+      : roundDownHalfHour(safePostMinutes / 60);
   const notes: string[] = [];
 
   if (preMinutes > 0) {
