@@ -290,7 +290,8 @@ export async function checkOtCompletenessForPeriod(
 }
 
 function isMonthlyEmployee(employmentType: string): boolean {
-  return employmentType.includes("รายเดือน");
+  const normalized = employmentType.trim().toLowerCase();
+  return normalized.includes("รายเดือน") || normalized.includes("monthly");
 }
 
 export async function findWageRowsForPeriod(
@@ -299,6 +300,14 @@ export async function findWageRowsForPeriod(
 ): Promise<{ headers: string[]; rows: WageCsvRow[]; payDate: string }> {
   const headers = await ensureWageHeaders();
   const payDate = getPayDateKey(selection);
+  const employees = await readEmployees(factoryId);
+  const monthlyEmployeeIds = new Set(
+    employees
+      .filter((employee) => isMonthlyEmployee(String(employee["การจ้างงาน"] ?? "")))
+      .map((employee) => employee.__id)
+  );
+  const { start, end } = getPeriodRange(selection);
+  const periodDayCount = enumerateDays(start, end).length;
   const dbRows = await fetchAllRows<WageDbRow>(
     "hr_wages",
     "pay_date,seq_no,row_data",
@@ -311,7 +320,14 @@ export async function findWageRowsForPeriod(
 
   return {
     headers,
-    rows: dbRows.map((row) => normaliseWageRow(headers, row.row_data ?? {})),
+    rows: dbRows.map((row) => {
+      const rowData = { ...(row.row_data ?? {}) } as Record<string, unknown>;
+      const employeeId = String(rowData["รหัสพนักงาน"] ?? "").trim();
+      if (monthlyEmployeeIds.has(employeeId)) {
+        rowData["จำนวนวันที่ทำงาน"] = String(periodDayCount);
+      }
+      return normaliseWageRow(headers, rowData);
+    }),
     payDate
   };
 }
@@ -354,6 +370,8 @@ export async function calculateWageForPeriod(
   const factoryLabel = getFactoryLabel(factoryId);
   const periodStart = toIsoDate(start);
   const periodEnd = toIsoDate(end);
+  const periodDays = enumerateDays(start, end);
+  const periodDayCount = periodDays.length;
 
   const periodRecords = records.filter(
     (record) => record.workDate >= startKey && record.workDate <= endKey
@@ -397,7 +415,7 @@ export async function calculateWageForPeriod(
     otTotalsByEmployee.set(record.employeeId, totals);
   }
 
-  const nonSundayPeriodDays = enumerateDays(start, end)
+  const nonSundayPeriodDays = periodDays
     .filter((day) => day.getDay() !== 0)
     .map((day) => toIsoDate(day));
 
@@ -421,14 +439,14 @@ export async function calculateWageForPeriod(
     const hourlyWage = dailyWage > 0 ? dailyWage / 8 : 0;
     const perMinuteWage = hourlyWage / 60;
 
-    const workDays = workedDayKeys.length;
+    const actualWorkDays = workedDayKeys.length;
     const nightShiftDays = workedDayKeys.filter((dayKey) => {
       const summary = employeeDays.get(dayKey);
       return summary?.shiftCode === "night";
     }).length;
 
     let totalLateMinutesForDeduction = 0;
-    let allBeforeEight = workDays > 0;
+    let allBeforeEight = actualWorkDays > 0;
 
     for (const dayKey of workedDayKeys) {
       const summary = employeeDays.get(dayKey)!;
@@ -446,7 +464,8 @@ export async function calculateWageForPeriod(
     const employmentIsMonthly = isMonthlyEmployee(employmentType);
     const baseWage = employmentIsMonthly
       ? Math.max(0, salaryRaw - absentDaysNonSunday * dailyWage)
-      : workDays * dailyWage;
+      : actualWorkDays * dailyWage;
+    const displayWorkDays = employmentIsMonthly ? periodDayCount : actualWorkDays;
 
     const ot1Pay = otTotals.ot1 * 1.5 * hourlyWage;
     const ot2Pay = otTotals.ot2 * (employmentIsMonthly ? 1 : 2) * hourlyWage;
@@ -509,7 +528,7 @@ export async function calculateWageForPeriod(
       การจ้างงาน: employmentType,
       ค่าแรงต่อวัน: formatMoney(dailyWage),
       เงินเดือน: formatMoney(salaryRaw),
-      จำนวนวันที่ทำงาน: formatInteger(workDays),
+      จำนวนวันที่ทำงาน: formatInteger(displayWorkDays),
       "จำนวนวันขาดงาน(ไม่รวมอาทิตย์)": formatInteger(absentDaysNonSunday),
       จำนวนนาทีมาสาย: formatMoney(totalLateMinutesForDeduction),
       จำนวนวันเข้ากะดึก: formatInteger(nightShiftDays),

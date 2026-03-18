@@ -98,6 +98,11 @@ function isKeywordMatch(text: string, keywords: string[]): boolean {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
+function isMonthlyEmploymentType(employmentType: string): boolean {
+  const normalized = employmentType.trim().toLowerCase();
+  return normalized.includes("รายเดือน") || normalized.includes("monthly");
+}
+
 function isSameCalendarDate(left: Date, right: Date): boolean {
   return (
     left.getFullYear() === right.getFullYear() &&
@@ -955,6 +960,10 @@ export async function buildOtSummary(
   const startKey = toIsoDate(start);
   const endKey = toIsoDate(end);
   const days = enumeratePeriodDays(selection);
+  const periodDayCount = days.length;
+  const employmentTypeByEmployee = new Map(
+    employees.map((employee) => [employee.__id, String(employee["การจ้างงาน"] || "").trim()])
+  );
 
   const filteredRecords = records.filter(
     (record) => record.workDate >= startKey && record.workDate <= endKey
@@ -1035,6 +1044,12 @@ export async function buildOtSummary(
   const rows = [...rowsMap.values()].sort((left, right) =>
     left.employeeId.localeCompare(right.employeeId, "th")
   );
+  for (const row of rows) {
+    const employmentType = employmentTypeByEmployee.get(row.employeeId) || "";
+    if (isMonthlyEmploymentType(employmentType)) {
+      row.workDays = periodDayCount;
+    }
+  }
 
   const totals = rows.reduce(
     (accumulator, row) => ({
