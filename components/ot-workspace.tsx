@@ -16,6 +16,9 @@ type SortKey =
   | "ot1"
   | "ot2"
   | "ot3"
+  | "ot1AfterRequest"
+  | "ot2AfterRequest"
+  | "ot3AfterRequest"
   | "otPay"
   | "otPay1x5"
   | "otPay2x"
@@ -136,6 +139,15 @@ function sortRows(rows: OTSummaryRow[], sortKey: SortKey, sortDirection: SortDir
       case "ot3":
         comparison = left.ot3 - right.ot3;
         break;
+      case "ot1AfterRequest":
+        comparison = left.ot1AfterRequest - right.ot1AfterRequest;
+        break;
+      case "ot2AfterRequest":
+        comparison = left.ot2AfterRequest - right.ot2AfterRequest;
+        break;
+      case "ot3AfterRequest":
+        comparison = left.ot3AfterRequest - right.ot3AfterRequest;
+        break;
       case "otPay":
         comparison = left.otPay - right.otPay;
         break;
@@ -166,12 +178,14 @@ function sortRows(rows: OTSummaryRow[], sortKey: SortKey, sortDirection: SortDir
 
 export function OtWorkspace() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const requestFileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectionDraft, setSelectionDraft] = useState(buildDefaultSelection);
   const [selection, setSelection] = useState<PeriodSelection | null>(null);
   const [summary, setSummary] = useState<OTSummaryResponse | null>(null);
   const [isTableExpanded, setIsTableExpanded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isRequestImporting, setIsRequestImporting] = useState(false);
   const [showPeriodModal, setShowPeriodModal] = useState(true);
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
@@ -283,6 +297,64 @@ export function OtWorkspace() {
     event.target.value = "";
   }
 
+  async function handleRequestImport(event: ChangeEvent<HTMLInputElement>) {
+    const files = event.target.files ? [...event.target.files] : [];
+    if (files.length === 0) {
+      return;
+    }
+
+    if (!selection) {
+      setErrorMessage("กรุณาเลือกงวดก่อนอัปโหลดใบคำขอโอที");
+      event.target.value = "";
+      return;
+    }
+
+    if (files.length > 5) {
+      setErrorMessage("อัปโหลดได้สูงสุด 5 รูปต่อครั้ง");
+      event.target.value = "";
+      return;
+    }
+
+    const formData = new FormData();
+    files.forEach((file) => formData.append("files", file));
+    formData.append("period", String(selection.period));
+    formData.append("month", String(selection.month));
+    formData.append("year", String(selection.year));
+
+    setIsRequestImporting(true);
+    setStatusMessage("");
+    setErrorMessage("");
+
+    const response = await fetch("/api/ot/request/upload", {
+      method: "POST",
+      body: formData
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | { message?: string; unmatchedNames?: string[] }
+      | null;
+
+    if (!response.ok) {
+      setErrorMessage(payload?.message || "อัปโหลดใบคำขอโอทีไม่สำเร็จ");
+      setIsRequestImporting(false);
+      event.target.value = "";
+      return;
+    }
+
+    const unmatchedNames = payload?.unmatchedNames || [];
+    const unmatchedLabel =
+      unmatchedNames.length > 0
+        ? ` | ชื่อที่ยังจับคู่ไม่ได้: ${unmatchedNames.slice(0, 10).join(", ")}${
+            unmatchedNames.length > 10 ? " ..." : ""
+          }`
+        : "";
+
+    setStatusMessage(`${payload?.message || "อัปโหลดใบคำขอโอทีสำเร็จ"}${unmatchedLabel}`);
+    setIsRequestImporting(false);
+    void loadSummary(selection);
+    event.target.value = "";
+  }
+
   function closePeriodModal() {
     setShowPeriodModal(false);
   }
@@ -373,6 +445,15 @@ export function OtWorkspace() {
       ot1: Number(filteredRows.reduce((total, row) => total + row.ot1, 0).toFixed(2)),
       ot2: Number(filteredRows.reduce((total, row) => total + row.ot2, 0).toFixed(2)),
       ot3: Number(filteredRows.reduce((total, row) => total + row.ot3, 0).toFixed(2)),
+      ot1AfterRequest: Number(
+        filteredRows.reduce((total, row) => total + row.ot1AfterRequest, 0).toFixed(2)
+      ),
+      ot2AfterRequest: Number(
+        filteredRows.reduce((total, row) => total + row.ot2AfterRequest, 0).toFixed(2)
+      ),
+      ot3AfterRequest: Number(
+        filteredRows.reduce((total, row) => total + row.ot3AfterRequest, 0).toFixed(2)
+      ),
       otPay: Number(filteredRows.reduce((total, row) => total + row.otPay, 0).toFixed(2)),
       otPay1x5: Number(filteredRows.reduce((total, row) => total + row.otPay1x5, 0).toFixed(2)),
       otPay2x: Number(filteredRows.reduce((total, row) => total + row.otPay2x, 0).toFixed(2)),
@@ -386,6 +467,7 @@ export function OtWorkspace() {
     (isTableExpanded ? 2 : 0) +
     1 +
     3 +
+    (isTableExpanded ? 3 : 0) +
     1 +
     (isTableExpanded ? 3 : 0) +
     (isTableExpanded ? summary?.days.length || 0 : 0);
@@ -437,7 +519,8 @@ export function OtWorkspace() {
             <h1>ชั่วโมง OT</h1>
             <p className="muted-text">
               อัปโหลดไฟล์สแกนหน้าแบบ `.txt` ระบบจะกันข้อมูลซ้ำ, บันทึกสะสมลงฐานข้อมูล,
-              คำนวณ OT จากข้อมูลสะสม (แยก OT ก่อนเข้างาน/หลังเลิกงาน) และแสดงตารางเฉพาะ OT หลังเลิกงาน
+              คำนวณ OT จากข้อมูลสะสม (แยก OT ก่อนเข้างาน/หลังเลิกงาน), รองรับอัปโหลดใบคำขอโอที (สูงสุด 5 รูป/ครั้ง)
+              เพื่อสกัดข้อมูลและเทียบกับ OT จริง
             </p>
           </div>
         </div>
@@ -463,12 +546,28 @@ export function OtWorkspace() {
             >
               {isImporting ? "กำลังประมวลผล..." : "Import ไฟล์"}
             </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={isRequestImporting}
+              onClick={() => requestFileInputRef.current?.click()}
+            >
+              {isRequestImporting ? "กำลังสกัดใบขอ OT..." : "Upload ใบคำขอ OT"}
+            </button>
             <input
               ref={fileInputRef}
               className="hidden-input"
               type="file"
               accept=".txt,text/plain"
               onChange={handleImport}
+            />
+            <input
+              ref={requestFileInputRef}
+              className="hidden-input"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleRequestImport}
             />
           </div>
         </div>
@@ -515,6 +614,18 @@ export function OtWorkspace() {
           <div className="metric-card">
             <span>OT 3.0 หลังเลิกงาน</span>
             <strong>{summary?.totals.ot3.toFixed(2) || "0.00"}</strong>
+          </div>
+          <div className="metric-card">
+            <span>OT1 หลังทำเรื่อง</span>
+            <strong>{summary?.totals.ot1AfterRequest.toFixed(2) || "0.00"}</strong>
+          </div>
+          <div className="metric-card">
+            <span>OT2 หลังทำเรื่อง</span>
+            <strong>{summary?.totals.ot2AfterRequest.toFixed(2) || "0.00"}</strong>
+          </div>
+          <div className="metric-card">
+            <span>OT3 หลังทำเรื่อง</span>
+            <strong>{summary?.totals.ot3AfterRequest.toFixed(2) || "0.00"}</strong>
           </div>
           <div className="metric-card">
             <span>มูลค่า OT</span>
@@ -589,6 +700,15 @@ export function OtWorkspace() {
                     <th>{renderSortButton("OT 1.5 หลัง", "ot1")}</th>
                     <th>{renderSortButton("OT 2 หลัง", "ot2")}</th>
                     <th>{renderSortButton("OT 3 หลัง", "ot3")}</th>
+                    {isTableExpanded ? (
+                      <th>{renderSortButton("OT1-หลังทำเรื่อง", "ot1AfterRequest")}</th>
+                    ) : null}
+                    {isTableExpanded ? (
+                      <th>{renderSortButton("OT2-หลังทำเรื่อง", "ot2AfterRequest")}</th>
+                    ) : null}
+                    {isTableExpanded ? (
+                      <th>{renderSortButton("OT3-request", "ot3AfterRequest")}</th>
+                    ) : null}
                     <th>{renderSortButton("มูลค่า OT", "otPay")}</th>
                     {isTableExpanded ? <th>{renderSortButton("OT 1.5 หลัง (x1.5)", "otPay1x5")}</th> : null}
                     {isTableExpanded ? <th>{renderSortButton("OT 2 หลัง (x2)", "otPay2x")}</th> : null}
@@ -620,6 +740,15 @@ export function OtWorkspace() {
                         <td className="numeric" title={buildRowHoverText(row)}>
                           {row.ot3.toFixed(2)}
                         </td>
+                        {isTableExpanded ? (
+                          <td className="numeric strong">{row.ot1AfterRequest.toFixed(2)}</td>
+                        ) : null}
+                        {isTableExpanded ? (
+                          <td className="numeric strong">{row.ot2AfterRequest.toFixed(2)}</td>
+                        ) : null}
+                        {isTableExpanded ? (
+                          <td className="numeric strong">{row.ot3AfterRequest.toFixed(2)}</td>
+                        ) : null}
                         <td className="numeric strong">{formatCurrency(row.otPay)}</td>
                         {isTableExpanded ? (
                           <td className="numeric">{row.otPay1x5.toFixed(2)}</td>
@@ -666,6 +795,15 @@ export function OtWorkspace() {
                       <td className="numeric strong">{visibleTotals.ot1.toFixed(2)}</td>
                       <td className="numeric strong">{visibleTotals.ot2.toFixed(2)}</td>
                       <td className="numeric strong">{visibleTotals.ot3.toFixed(2)}</td>
+                      {isTableExpanded ? (
+                        <td className="numeric strong">{visibleTotals.ot1AfterRequest.toFixed(2)}</td>
+                      ) : null}
+                      {isTableExpanded ? (
+                        <td className="numeric strong">{visibleTotals.ot2AfterRequest.toFixed(2)}</td>
+                      ) : null}
+                      {isTableExpanded ? (
+                        <td className="numeric strong">{visibleTotals.ot3AfterRequest.toFixed(2)}</td>
+                      ) : null}
                       <td className="numeric strong">{formatCurrency(visibleTotals.otPay)}</td>
                       {isTableExpanded ? (
                         <td className="numeric strong">{visibleTotals.otPay1x5.toFixed(2)}</td>

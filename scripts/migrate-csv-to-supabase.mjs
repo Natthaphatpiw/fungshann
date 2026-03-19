@@ -258,6 +258,10 @@ async function migrateOtDaily(supabase, factoryId, filePath) {
       ot2: Number(row.ot2 ?? 0),
       ot3: Number(row.ot3 ?? 0),
       total_ot: Number(row.totalOt ?? 0),
+      ot_request_status: String(row.otRequestStatus ?? "unsubmitted"),
+      ot1_after_request: Number(row.ot1AfterRequest ?? 0),
+      ot2_after_request: Number(row.ot2AfterRequest ?? 0),
+      ot3_after_request: Number(row.ot3AfterRequest ?? 0),
       ot_pay: Number(row.otPay ?? 0),
       notes: String(row.notes ?? "")
     }))

@@ -814,6 +814,10 @@ export async function computeOtRecordsFromScans(
       ot2,
       ot3,
       totalOt,
+      otRequestStatus: "unsubmitted",
+      ot1AfterRequest: 0,
+      ot2AfterRequest: 0,
+      ot3AfterRequest: 0,
       otPay,
       notes
     };
@@ -826,6 +830,26 @@ export async function computeOtRecords(factoryId: FactoryId, content: string): P
 
 export async function saveOtRecords(factoryId: FactoryId, records: OTDailyRecord[]): Promise<void> {
   const supabase = getSupabaseAdmin();
+  const existingRows = await fetchAllRows<{
+    work_date: string;
+    employee_id: string;
+    entered_at: string;
+    exited_at: string;
+    ot_request_status: string | null;
+    ot1_after_request: number | null;
+    ot2_after_request: number | null;
+    ot3_after_request: number | null;
+  }>(
+    "hr_ot_daily",
+    "work_date,employee_id,entered_at,exited_at,ot_request_status,ot1_after_request,ot2_after_request,ot3_after_request",
+    (query) => query.eq("factory_id", factoryId)
+  );
+  const existingRequestMap = new Map(
+    existingRows.map((row) => [
+      `${row.work_date}|${row.employee_id}|${row.entered_at}|${row.exited_at}`,
+      row
+    ])
+  );
 
   const { error: deleteError } = await supabase.from("hr_ot_daily").delete().eq("factory_id", factoryId);
 
@@ -833,32 +857,47 @@ export async function saveOtRecords(factoryId: FactoryId, records: OTDailyRecord
     throw new Error(`[hr_ot_daily] ${deleteError.message}`);
   }
 
-  const payload = records.map((record) => ({
-    factory_id: factoryId,
-    work_date: record.workDate,
-    employee_id: record.employeeId,
-    employee_name: record.employeeName,
-    department: record.department,
-    position: record.position,
-    shift_code: record.shiftCode,
-    is_sunday: record.isSunday,
-    entered_at: record.enteredAt,
-    exited_at: record.exitedAt,
-    ot1_before: Number(record.ot1Before.toFixed(2)),
-    ot1_after: Number(record.ot1After.toFixed(2)),
-    ot2_before: Number(record.ot2Before.toFixed(2)),
-    ot2_after: Number(record.ot2After.toFixed(2)),
-    ot3_before: Number(record.ot3Before.toFixed(2)),
-    ot3_after: Number(record.ot3After.toFixed(2)),
-    total_ot_before: Number(record.totalOtBefore.toFixed(2)),
-    total_ot_after: Number(record.totalOtAfter.toFixed(2)),
-    ot1: Number(record.ot1.toFixed(2)),
-    ot2: Number(record.ot2.toFixed(2)),
-    ot3: Number(record.ot3.toFixed(2)),
-    total_ot: Number(record.totalOt.toFixed(2)),
-    ot_pay: Number(record.otPay.toFixed(2)),
-    notes: record.notes
-  }));
+  const payload = records.map((record) => {
+    const key = `${record.workDate}|${record.employeeId}|${record.enteredAt}|${record.exitedAt}`;
+    const existingRequest = existingRequestMap.get(key);
+
+    return {
+      factory_id: factoryId,
+      work_date: record.workDate,
+      employee_id: record.employeeId,
+      employee_name: record.employeeName,
+      department: record.department,
+      position: record.position,
+      shift_code: record.shiftCode,
+      is_sunday: record.isSunday,
+      entered_at: record.enteredAt,
+      exited_at: record.exitedAt,
+      ot1_before: Number(record.ot1Before.toFixed(2)),
+      ot1_after: Number(record.ot1After.toFixed(2)),
+      ot2_before: Number(record.ot2Before.toFixed(2)),
+      ot2_after: Number(record.ot2After.toFixed(2)),
+      ot3_before: Number(record.ot3Before.toFixed(2)),
+      ot3_after: Number(record.ot3After.toFixed(2)),
+      total_ot_before: Number(record.totalOtBefore.toFixed(2)),
+      total_ot_after: Number(record.totalOtAfter.toFixed(2)),
+      ot1: Number(record.ot1.toFixed(2)),
+      ot2: Number(record.ot2.toFixed(2)),
+      ot3: Number(record.ot3.toFixed(2)),
+      total_ot: Number(record.totalOt.toFixed(2)),
+      ot_request_status: existingRequest?.ot_request_status || record.otRequestStatus || "unsubmitted",
+      ot1_after_request: Number(
+        (existingRequest?.ot1_after_request ?? record.ot1AfterRequest).toFixed(2)
+      ),
+      ot2_after_request: Number(
+        (existingRequest?.ot2_after_request ?? record.ot2AfterRequest).toFixed(2)
+      ),
+      ot3_after_request: Number(
+        (existingRequest?.ot3_after_request ?? record.ot3AfterRequest).toFixed(2)
+      ),
+      ot_pay: Number(record.otPay.toFixed(2)),
+      notes: record.notes
+    };
+  });
 
   for (const chunk of chunkArray(payload, 500)) {
     const { error } = await supabase.from("hr_ot_daily").insert(chunk);
@@ -892,11 +931,15 @@ export async function loadOtRecords(factoryId: FactoryId): Promise<OTDailyRecord
     ot2: number;
     ot3: number;
     total_ot: number;
+    ot_request_status: string | null;
+    ot1_after_request: number | null;
+    ot2_after_request: number | null;
+    ot3_after_request: number | null;
     ot_pay: number;
     notes: string | null;
   }>(
     "hr_ot_daily",
-    "work_date,employee_id,employee_name,department,position,shift_code,is_sunday,entered_at,exited_at,ot1_before,ot1_after,ot2_before,ot2_after,ot3_before,ot3_after,total_ot_before,total_ot_after,ot1,ot2,ot3,total_ot,ot_pay,notes",
+    "work_date,employee_id,employee_name,department,position,shift_code,is_sunday,entered_at,exited_at,ot1_before,ot1_after,ot2_before,ot2_after,ot3_before,ot3_after,total_ot_before,total_ot_after,ot1,ot2,ot3,total_ot,ot_request_status,ot1_after_request,ot2_after_request,ot3_after_request,ot_pay,notes",
     (query) =>
       query
         .eq("factory_id", factoryId)
@@ -927,6 +970,10 @@ export async function loadOtRecords(factoryId: FactoryId): Promise<OTDailyRecord
     ot2: Number(row.ot2_after ?? row.ot2 ?? 0),
     ot3: Number(row.ot3_after ?? row.ot3 ?? 0),
     totalOt: Number(row.total_ot_after ?? row.total_ot ?? 0),
+    otRequestStatus: String(row.ot_request_status ?? "unsubmitted"),
+    ot1AfterRequest: Number(row.ot1_after_request ?? 0),
+    ot2AfterRequest: Number(row.ot2_after_request ?? 0),
+    ot3AfterRequest: Number(row.ot3_after_request ?? 0),
     otPay: Number(row.ot_pay ?? 0),
     notes: String(row.notes ?? "")
   }));
@@ -982,6 +1029,9 @@ export async function buildOtSummary(
       ot1: 0,
       ot2: 0,
       ot3: 0,
+      ot1AfterRequest: 0,
+      ot2AfterRequest: 0,
+      ot3AfterRequest: 0,
       totalOt: 0,
       otPay: 0,
       otPay1x5: 0,
@@ -1003,6 +1053,9 @@ export async function buildOtSummary(
         ot1: 0,
         ot2: 0,
         ot3: 0,
+        ot1AfterRequest: 0,
+        ot2AfterRequest: 0,
+        ot3AfterRequest: 0,
         totalOt: 0,
         otPay: 0,
         otPay1x5: 0,
@@ -1021,6 +1074,9 @@ export async function buildOtSummary(
     row.ot1 = Number((row.ot1 + record.ot1).toFixed(2));
     row.ot2 = Number((row.ot2 + record.ot2).toFixed(2));
     row.ot3 = Number((row.ot3 + record.ot3).toFixed(2));
+    row.ot1AfterRequest = Number((row.ot1AfterRequest + record.ot1AfterRequest).toFixed(2));
+    row.ot2AfterRequest = Number((row.ot2AfterRequest + record.ot2AfterRequest).toFixed(2));
+    row.ot3AfterRequest = Number((row.ot3AfterRequest + record.ot3AfterRequest).toFixed(2));
     row.totalOt = Number((row.totalOt + record.totalOt).toFixed(2));
     row.otPay = Number((row.otPay + record.otPay).toFixed(2));
     row.otPay1x5 = Number((row.otPay1x5 + record.ot1 * 1.5).toFixed(2));
@@ -1057,6 +1113,9 @@ export async function buildOtSummary(
       ot1: Number((accumulator.ot1 + row.ot1).toFixed(2)),
       ot2: Number((accumulator.ot2 + row.ot2).toFixed(2)),
       ot3: Number((accumulator.ot3 + row.ot3).toFixed(2)),
+      ot1AfterRequest: Number((accumulator.ot1AfterRequest + row.ot1AfterRequest).toFixed(2)),
+      ot2AfterRequest: Number((accumulator.ot2AfterRequest + row.ot2AfterRequest).toFixed(2)),
+      ot3AfterRequest: Number((accumulator.ot3AfterRequest + row.ot3AfterRequest).toFixed(2)),
       totalOt: Number((accumulator.totalOt + row.totalOt).toFixed(2)),
       otPay: Number((accumulator.otPay + row.otPay).toFixed(2)),
       otPay1x5: Number((accumulator.otPay1x5 + row.otPay1x5).toFixed(2)),
@@ -1068,6 +1127,9 @@ export async function buildOtSummary(
       ot1: 0,
       ot2: 0,
       ot3: 0,
+      ot1AfterRequest: 0,
+      ot2AfterRequest: 0,
+      ot3AfterRequest: 0,
       totalOt: 0,
       otPay: 0,
       otPay1x5: 0,

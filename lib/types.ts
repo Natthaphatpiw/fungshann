@@ -50,6 +50,10 @@ export interface OTDailyRecord {
   ot2: number;
   ot3: number;
   totalOt: number;
+  otRequestStatus: string;
+  ot1AfterRequest: number;
+  ot2AfterRequest: number;
+  ot3AfterRequest: number;
   otPay: number;
   notes: string;
 }
@@ -76,6 +80,9 @@ export interface OTSummaryRow {
   ot1: number;
   ot2: number;
   ot3: number;
+  ot1AfterRequest: number;
+  ot2AfterRequest: number;
+  ot3AfterRequest: number;
   totalOt: number;
   otPay: number;
   otPay1x5: number;
@@ -104,6 +111,9 @@ export interface OTSummaryResponse {
     ot1: number;
     ot2: number;
     ot3: number;
+    ot1AfterRequest: number;
+    ot2AfterRequest: number;
+    ot3AfterRequest: number;
     totalOt: number;
     otPay: number;
     otPay1x5: number;
