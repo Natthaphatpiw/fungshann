@@ -4,6 +4,21 @@ import { getSession } from "@/lib/auth";
 import { processOtRequestUpload, MAX_OT_REQUEST_FILES } from "@/lib/ot-request";
 import { clampSelection } from "@/lib/periods";
 
+function normalizeUploadErrorMessage(rawMessage: string): string {
+  if (
+    /hr_ot_request_batches|hr_ot_request_entries|Could not find the table|relation .*does not exist/i.test(
+      rawMessage
+    )
+  ) {
+    return (
+      "ยังไม่พบตารางระบบใบคำขอ OT ในฐานข้อมูล " +
+      "กรุณารัน SQL migration จากไฟล์ supabase/ot-request-migration.sql บนโปรเจกต์ Supabase ปัจจุบันก่อน"
+    );
+  }
+
+  return rawMessage;
+}
+
 export async function POST(request: Request) {
   const session = await getSession();
 
@@ -49,8 +64,10 @@ export async function POST(request: Request) {
       ...result
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "ไม่สามารถประมวลผลใบขอ OT ได้";
+    const message =
+      error instanceof Error
+        ? normalizeUploadErrorMessage(error.message)
+        : "ไม่สามารถประมวลผลใบขอ OT ได้";
     return NextResponse.json({ message }, { status: 500 });
   }
 }
-

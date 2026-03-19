@@ -188,6 +188,9 @@ export function OtWorkspace() {
   const [isRequestImporting, setIsRequestImporting] = useState(false);
   const [showPeriodModal, setShowPeriodModal] = useState(true);
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [requestUploadFiles, setRequestUploadFiles] = useState<File[]>([]);
+  const [requestPreviewUrls, setRequestPreviewUrls] = useState<string[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("ALL");
@@ -260,6 +263,20 @@ export function OtWorkspace() {
     );
   }, [summary]);
 
+  useEffect(() => {
+    if (requestUploadFiles.length === 0) {
+      setRequestPreviewUrls([]);
+      return;
+    }
+
+    const previewUrls = requestUploadFiles.map((file) => URL.createObjectURL(file));
+    setRequestPreviewUrls(previewUrls);
+
+    return () => {
+      previewUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [requestUploadFiles]);
+
   async function handleImport(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) {
@@ -297,14 +314,9 @@ export function OtWorkspace() {
     event.target.value = "";
   }
 
-  async function handleRequestImport(event: ChangeEvent<HTMLInputElement>) {
+  function handleRequestFileSelection(event: ChangeEvent<HTMLInputElement>) {
     const files = event.target.files ? [...event.target.files] : [];
     if (files.length === 0) {
-      return;
-    }
-
-    if (!selection) {
-      setErrorMessage("กรุณาเลือกงวดก่อนอัปโหลดใบคำขอโอที");
       event.target.value = "";
       return;
     }
@@ -315,8 +327,29 @@ export function OtWorkspace() {
       return;
     }
 
+    setRequestUploadFiles(files);
+    setErrorMessage("");
+    event.target.value = "";
+  }
+
+  async function submitRequestImport() {
+    if (!selection) {
+      setErrorMessage("กรุณาเลือกงวดก่อนอัปโหลดใบคำขอโอที");
+      return;
+    }
+
+    if (requestUploadFiles.length === 0) {
+      setErrorMessage("กรุณาเลือกรูปใบคำขอโอทีก่อนยืนยัน");
+      return;
+    }
+
+    if (requestUploadFiles.length > 5) {
+      setErrorMessage("อัปโหลดได้สูงสุด 5 รูปต่อครั้ง");
+      return;
+    }
+
     const formData = new FormData();
-    files.forEach((file) => formData.append("files", file));
+    requestUploadFiles.forEach((file) => formData.append("files", file));
     formData.append("period", String(selection.period));
     formData.append("month", String(selection.month));
     formData.append("year", String(selection.year));
@@ -337,7 +370,6 @@ export function OtWorkspace() {
     if (!response.ok) {
       setErrorMessage(payload?.message || "อัปโหลดใบคำขอโอทีไม่สำเร็จ");
       setIsRequestImporting(false);
-      event.target.value = "";
       return;
     }
 
@@ -351,8 +383,23 @@ export function OtWorkspace() {
 
     setStatusMessage(`${payload?.message || "อัปโหลดใบคำขอโอทีสำเร็จ"}${unmatchedLabel}`);
     setIsRequestImporting(false);
+    setShowRequestModal(false);
+    setRequestUploadFiles([]);
     void loadSummary(selection);
-    event.target.value = "";
+  }
+
+  function openRequestModal() {
+    setRequestUploadFiles([]);
+    setShowRequestModal(true);
+    setErrorMessage("");
+  }
+
+  function closeRequestModal() {
+    if (isRequestImporting) {
+      return;
+    }
+    setShowRequestModal(false);
+    setRequestUploadFiles([]);
   }
 
   function closePeriodModal() {
@@ -550,9 +597,9 @@ export function OtWorkspace() {
               className="secondary-button"
               type="button"
               disabled={isRequestImporting}
-              onClick={() => requestFileInputRef.current?.click()}
+              onClick={openRequestModal}
             >
-              {isRequestImporting ? "กำลังสกัดใบขอ OT..." : "Upload ใบคำขอ OT"}
+              Upload ใบคำขอ OT
             </button>
             <input
               ref={fileInputRef}
@@ -567,7 +614,7 @@ export function OtWorkspace() {
               type="file"
               accept="image/*"
               multiple
-              onChange={handleRequestImport}
+              onChange={handleRequestFileSelection}
             />
           </div>
         </div>
@@ -1022,6 +1069,91 @@ export function OtWorkspace() {
                   แสดงตามที่เลือก
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showRequestModal ? (
+        <div className="modal-overlay" onClick={closeRequestModal}>
+          <div className="modal-card request-upload-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-top">
+              <div>
+                <div className="eyebrow">ใบคำขอโอที</div>
+                <h2>อัปโหลดรูปใบคำขอ OT</h2>
+                <p className="muted-text request-upload-hint">
+                  รองรับสูงสุด 5 รูปต่อครั้ง เลือกรูปแล้วตรวจสอบ preview ก่อนกดยืนยัน
+                </p>
+              </div>
+              <button
+                className="icon-button modal-close"
+                type="button"
+                onClick={closeRequestModal}
+                aria-label="ปิดหน้าต่าง"
+                title="ปิดหน้าต่าง"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="request-upload-summary">
+              <span>งวดที่กำลังทำรายการ</span>
+              <strong>{summary?.periodLabel || "ยังไม่ได้เลือกงวด"}</strong>
+            </div>
+
+            <div className="inline-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isRequestImporting}
+                onClick={() => requestFileInputRef.current?.click()}
+              >
+                เลือกรูปใบคำขอ OT
+              </button>
+              <button
+                className="secondary-button small-button"
+                type="button"
+                disabled={isRequestImporting || requestUploadFiles.length === 0}
+                onClick={() => setRequestUploadFiles([])}
+              >
+                ล้างรายการรูป
+              </button>
+              <span className="toolbar-note">{`เลือกแล้ว ${requestUploadFiles.length} / 5 รูป`}</span>
+            </div>
+
+            {requestUploadFiles.length > 0 ? (
+              <div className="request-preview-grid">
+                {requestUploadFiles.map((file, index) => (
+                  <figure className="request-preview-card" key={`${file.name}-${index}`}>
+                    <img
+                      className="request-preview-image"
+                      src={requestPreviewUrls[index]}
+                      alt={`preview-${file.name}`}
+                    />
+                    <figcaption className="request-preview-name">{file.name}</figcaption>
+                  </figure>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state request-upload-empty">
+                ยังไม่ได้เลือกรูปใบคำขอโอที
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button className="secondary-button" type="button" onClick={closeRequestModal}>
+                ยกเลิก
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={isRequestImporting || requestUploadFiles.length === 0 || !selection}
+                onClick={() => {
+                  void submitRequestImport();
+                }}
+              >
+                {isRequestImporting ? "กำลังสกัดใบขอ OT..." : "ยืนยันคำขอโอที"}
+              </button>
             </div>
           </div>
         </div>
