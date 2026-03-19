@@ -111,9 +111,25 @@ function isSameCalendarDate(left: Date, right: Date): boolean {
   );
 }
 
+function isNightShiftSession(enteredAt: Date, exitedAt: Date): boolean {
+  const enteredMinutes = enteredAt.getHours() * 60 + enteredAt.getMinutes();
+  const exitedMinutes = exitedAt.getHours() * 60 + exitedAt.getMinutes();
+  const crossesMidnight = !isSameCalendarDate(enteredAt, exitedAt);
+
+  if (enteredMinutes >= 18 * 60) {
+    return true;
+  }
+
+  // Night-shift staff can scan in before 20:00 when they have OT before shift.
+  // When a session starts in the late afternoon and exits the next morning,
+  // it should be treated as a night shift rather than a day shift crossing midnight.
+  return crossesMidnight && enteredMinutes >= 17 * 60 && exitedMinutes <= 12 * 60;
+}
+
 function getShiftProfile(
   employee: EmployeeRecord | undefined,
   enteredAt: Date,
+  exitedAt: Date,
   previousSession: WorkSession | null
 ): {
   shiftCode: OTDailyRecord["shiftCode"];
@@ -125,7 +141,7 @@ function getShiftProfile(
   breakEnd: Date | null;
 } {
   const department = employee?.__department || "";
-  const isNight = enteredAt.getHours() >= 18;
+  const isNight = isNightShiftSession(enteredAt, exitedAt);
 
   if (isNight) {
     const scheduledStart = new Date(
@@ -523,16 +539,35 @@ export function parseBiometricLog(content: string): RawScan[] {
   const scans: RawScan[] = [];
 
   for (const line of lines) {
-    const parts = line.split("\t").map((part) => part.trim());
-    if (parts.length < 5) {
-      continue;
-    }
+    const directMatch = line.match(
+      /(\d{1,2})\s*\t\s*(\d{2}-\d{2}-\d{4})\s*\t\s*(\d{2}:\d{2}:\d{2})\s*\t\s*'?(\d+)\s*\t*\s*([12])(?:\D|$)/
+    );
 
-    const machineCode = parts[0];
-    const dateLabel = parts[1];
-    const timeLabel = parts[2];
-    const employeeToken = parts[3];
-    const scanTypeToken = [...parts].reverse().find((part) => part === "1" || part === "2");
+    let machineCode = "";
+    let dateLabel = "";
+    let timeLabel = "";
+    let employeeToken = "";
+    let scanTypeToken: string | undefined;
+
+    if (directMatch) {
+      machineCode = directMatch[1].padStart(2, "0");
+      dateLabel = directMatch[2];
+      timeLabel = directMatch[3];
+      employeeToken = directMatch[4];
+      scanTypeToken = directMatch[5];
+    } else {
+      const parts = line.split("\t").map((part) => part.trim());
+      if (parts.length < 5) {
+        continue;
+      }
+
+      const normalizedScanParts = parts.map((part) => part.replace(/[^\d]/g, ""));
+      machineCode = normalizedScanParts[0]?.slice(-2) || parts[0].replace(/[^\d]/g, "").slice(-2);
+      dateLabel = parts[1];
+      timeLabel = parts[2];
+      employeeToken = parts[3];
+      scanTypeToken = [...normalizedScanParts].reverse().find((part) => part === "1" || part === "2");
+    }
 
     const scannedAt = parseLogDate(dateLabel, timeLabel);
     const type = scanTypeToken === "2" ? 2 : scanTypeToken === "1" ? 1 : null;
@@ -541,9 +576,19 @@ export function parseBiometricLog(content: string): RawScan[] {
       continue;
     }
 
+    const employeeId = employeeToken.replace(/^'+/, "").replace(/[^\d]/g, "").trim();
+    if (!employeeId) {
+      continue;
+    }
+
+    const normalizedMachineCode = machineCode.replace(/[^\d]/g, "").slice(-2) || machineCode.trim();
+    if (!normalizedMachineCode) {
+      continue;
+    }
+
     scans.push({
-      employeeId: employeeToken.replace(/^'+/, "").trim(),
-      machineCode,
+      employeeId,
+      machineCode: normalizedMachineCode,
       type,
       scannedAt
     });
@@ -756,7 +801,7 @@ export async function computeOtRecordsFromScans(
   return sessions.map((session) => {
     const employee = employeeMap.get(session.employeeId);
     const previousSession = previousByEmployee.get(session.employeeId) ?? null;
-    const profile = getShiftProfile(employee, session.enteredAt, previousSession);
+    const profile = getShiftProfile(employee, session.enteredAt, session.exitedAt, previousSession);
     const isSunday = session.enteredAt.getDay() === 0;
 
     previousByEmployee.set(session.employeeId, session);
