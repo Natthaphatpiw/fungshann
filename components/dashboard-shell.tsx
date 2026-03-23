@@ -73,6 +73,7 @@ export function DashboardShell({ session, children }: DashboardShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const storageKey = `fshann-sidebar-${session.factoryId}`;
+  const menuItems = MENU_ITEMS.filter((item) => item.roles.includes(session.role));
   const [collapsed, setCollapsed] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -137,7 +138,7 @@ export function DashboardShell({ session, children }: DashboardShellProps) {
           </div>
 
           <nav className="sidebar-nav">
-            {MENU_ITEMS.map((item) => {
+            {menuItems.map((item) => {
               const active = pathname === item.href;
               return (
                 <Link
@@ -182,6 +183,9 @@ export function DashboardShell({ session, children }: DashboardShellProps) {
             </div>
           </div>
           <div className="header-actions">
+            {session.role === "visitor" && session.departmentScope ? (
+              <span className="user-chip">{`แผนก: ${session.departmentScope}`}</span>
+            ) : null}
             <span className="user-chip">{session.username}</span>
             <button className="secondary-button" type="button" onClick={handleLogout}>
               {isLoggingOut ? "กำลังออกจากระบบ..." : "ออกจากระบบ"}

@@ -2,7 +2,7 @@
 
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 
-import { OTSummaryResponse, OTSummaryRow } from "@/lib/types";
+import { OTSummaryResponse, OTSummaryRow, SessionAccount } from "@/lib/types";
 
 type PeriodSelection = ReturnType<typeof buildDefaultSelection>;
 type SortDirection = "asc" | "desc";
@@ -176,7 +176,13 @@ function sortRows(rows: OTSummaryRow[], sortKey: SortKey, sortDirection: SortDir
   });
 }
 
-export function OtWorkspace() {
+interface OtWorkspaceProps {
+  session: SessionAccount;
+}
+
+export function OtWorkspace({ session }: OtWorkspaceProps) {
+  const isVisitor = session.role === "visitor";
+  const lockedDepartment = isVisitor ? session.departmentScope?.trim() || "" : "";
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const requestFileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectionDraft, setSelectionDraft] = useState(buildDefaultSelection);
@@ -258,10 +264,14 @@ export function OtWorkspace() {
     setEmployeePickerDraftIds((current) =>
       current.filter((employeeId) => availableIds.has(employeeId))
     );
-    setDepartmentFilter((current) =>
-      current === "ALL" || availableDepartments.has(current) ? current : "ALL"
-    );
-  }, [summary]);
+    setDepartmentFilter((current) => {
+      if (lockedDepartment) {
+        return lockedDepartment;
+      }
+
+      return current === "ALL" || availableDepartments.has(current) ? current : "ALL";
+    });
+  }, [lockedDepartment, summary]);
 
   useEffect(() => {
     if (requestUploadFiles.length === 0) {
@@ -278,6 +288,12 @@ export function OtWorkspace() {
   }, [requestUploadFiles]);
 
   async function handleImport(event: ChangeEvent<HTMLInputElement>) {
+    if (isVisitor) {
+      setErrorMessage("บัญชี visitor ดูข้อมูลได้อย่างเดียว ไม่สามารถนำเข้าข้อมูลสแกนหน้า");
+      event.target.value = "";
+      return;
+    }
+
     const file = event.target.files?.[0];
     if (!file) {
       return;
@@ -315,6 +331,12 @@ export function OtWorkspace() {
   }
 
   function handleRequestFileSelection(event: ChangeEvent<HTMLInputElement>) {
+    if (isVisitor) {
+      setErrorMessage("บัญชี visitor ดูข้อมูลได้อย่างเดียว ไม่สามารถอัปโหลดใบคำขอ OT");
+      event.target.value = "";
+      return;
+    }
+
     const files = event.target.files ? [...event.target.files] : [];
     if (files.length === 0) {
       event.target.value = "";
@@ -333,6 +355,11 @@ export function OtWorkspace() {
   }
 
   async function submitRequestImport() {
+    if (isVisitor) {
+      setErrorMessage("บัญชี visitor ไม่มีสิทธิ์อัปโหลดใบคำขอ OT");
+      return;
+    }
+
     if (!selection) {
       setErrorMessage("กรุณาเลือกงวดก่อนอัปโหลดใบคำขอโอที");
       return;
@@ -389,6 +416,11 @@ export function OtWorkspace() {
   }
 
   function openRequestModal() {
+    if (isVisitor) {
+      setErrorMessage("บัญชี visitor ไม่มีสิทธิ์อัปโหลดใบคำขอ OT");
+      return;
+    }
+
     setRequestUploadFiles([]);
     setShowRequestModal(true);
     setErrorMessage("");
@@ -413,7 +445,7 @@ export function OtWorkspace() {
   }
 
   function resetViewState() {
-    setDepartmentFilter("ALL");
+    setDepartmentFilter(lockedDepartment || "ALL");
     setSortKey("");
     setSortDirection("asc");
     setSelectedEmployeeIds([]);
@@ -569,6 +601,9 @@ export function OtWorkspace() {
               คำนวณ OT จากข้อมูลสะสม (แยก OT ก่อนเข้างาน/หลังเลิกงาน), รองรับอัปโหลดใบคำขอโอที (สูงสุด 5 รูป/ครั้ง)
               เพื่อสกัดข้อมูลและเทียบกับ OT จริง
             </p>
+            {isVisitor ? (
+              <p className="muted-text">{`สิทธิ์ visitor จะแสดงเฉพาะข้อมูล OT ของแผนก ${lockedDepartment || "-"}`}</p>
+            ) : null}
           </div>
         </div>
 
@@ -585,22 +620,26 @@ export function OtWorkspace() {
             <button className="secondary-button" type="button" onClick={() => setShowPeriodModal(true)}>
               เลือกงวด
             </button>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={isImporting}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              {isImporting ? "กำลังประมวลผล..." : "Import ไฟล์"}
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={isRequestImporting}
-              onClick={openRequestModal}
-            >
-              Upload ใบคำขอ OT
-            </button>
+            {!isVisitor ? (
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isImporting}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {isImporting ? "กำลังประมวลผล..." : "Import ไฟล์"}
+              </button>
+            ) : null}
+            {!isVisitor ? (
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isRequestImporting}
+                onClick={openRequestModal}
+              >
+                Upload ใบคำขอ OT
+              </button>
+            ) : null}
             <input
               ref={fileInputRef}
               className="hidden-input"
@@ -682,21 +721,28 @@ export function OtWorkspace() {
 
         <div className="toolbar-row">
           <div className="toolbar-left">
-            <label className="field compact-field">
-              <span>ฟิลเตอร์แผนก</span>
-              <select
-                className="toolbar-select"
-                value={departmentFilter}
-                onChange={(event) => setDepartmentFilter(event.target.value)}
-              >
-                <option value="ALL">ทุกแผนก</option>
-                {departmentOptions.map((department) => (
-                  <option key={department} value={department}>
-                    {department}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {isVisitor ? (
+              <div className="summary-pill compact-summary-pill">
+                <span>สิทธิ์แสดงข้อมูล</span>
+                <strong>{lockedDepartment || "-"}</strong>
+              </div>
+            ) : (
+              <label className="field compact-field">
+                <span>ฟิลเตอร์แผนก</span>
+                <select
+                  className="toolbar-select"
+                  value={departmentFilter}
+                  onChange={(event) => setDepartmentFilter(event.target.value)}
+                >
+                  <option value="ALL">ทุกแผนก</option>
+                  {departmentOptions.map((department) => (
+                    <option key={department} value={department}>
+                      {department}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button className="secondary-button" type="button" onClick={openEmployeePicker}>
               เลือกพนักงาน
             </button>

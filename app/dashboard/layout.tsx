@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard-shell";
-import { getSession } from "@/lib/auth";
+import { getSession, isRequestUploaderSession } from "@/lib/auth";
 
 export default async function DashboardLayout({
   children
@@ -12,6 +12,10 @@ export default async function DashboardLayout({
 
   if (!session) {
     redirect("/login");
+  }
+
+  if (isRequestUploaderSession(session)) {
+    redirect("/request-center");
   }
 
   return <DashboardShell session={session}>{children}</DashboardShell>;

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 
-import { getSession } from "@/lib/auth";
+import { getSession, isRequestUploaderSession, isVisitorSession } from "@/lib/auth";
 import { parseCsvContent } from "@/lib/csv";
 import { readEmployeeHeaders, readEmployeeRows, writeEmployeeRows } from "@/lib/employees";
 
@@ -41,6 +41,14 @@ export async function POST(request: Request) {
 
   if (!session) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isVisitorSession(session)) {
+    return NextResponse.json({ message: "บัญชี visitor ไม่มีสิทธิ์นำเข้าข้อมูลพนักงาน" }, { status: 403 });
+  }
+
+  if (isRequestUploaderSession(session)) {
+    return NextResponse.json({ message: "บัญชีนี้ไม่มีสิทธิ์นำเข้าข้อมูลพนักงาน" }, { status: 403 });
   }
 
   const formData = await request.formData();

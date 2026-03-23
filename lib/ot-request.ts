@@ -1,9 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
+import { createHash } from "node:crypto";
 
-import { getPeriodRange, toIsoDate } from "@/lib/periods";
+import { buildPeriodLabel, getPeriodRange, toIsoDate } from "@/lib/periods";
 import { chunkArray, fetchAllRows, getSupabaseAdmin } from "@/lib/supabase";
-import { FactoryId, PeriodSelection } from "@/lib/types";
+import { FactoryId, OtRequestHistoryResponse, OtRequestHistoryRow, PeriodSelection } from "@/lib/types";
 
 const GEMINI_MODEL = "gemini-3.1-flash-lite-preview";
 const OPENAI_MODEL = "gpt-4.1";
@@ -14,6 +15,7 @@ interface EmployeeNameRow {
   employee_id: string;
   first_name: string;
   last_name: string;
+  department: string | null;
 }
 
 interface RequestInterval {
@@ -38,6 +40,7 @@ interface ExtractedOtRequestEntry {
 }
 
 interface OTDailyRequestRow {
+  id: number;
   factory_id: FactoryId;
   work_date: string;
   employee_id: string;
@@ -60,11 +63,79 @@ interface NameCorrection {
 export interface OtRequestUploadResult {
   batchId: number;
   processedFileCount: number;
+  duplicateFileCount: number;
   extractedEntryCount: number;
   matchedEntryCount: number;
   unmatchedNames: string[];
   updatedOtRowCount: number;
+  loggedRequestCount: number;
   statusCounts: Record<string, number>;
+}
+
+interface ExistingBatchRow {
+  id: number;
+  metadata: {
+    sourceFileHashes?: string[];
+  } | null;
+}
+
+interface StoredRequestEntryRow {
+  employee_id: string | null;
+  request_date: string;
+  request_start_minute: number | null;
+  request_end_minute: number | null;
+  has_employee_signature: boolean;
+  has_supervisor_signature: boolean;
+}
+
+interface OtRequestLogInsertRow {
+  batch_id: number;
+  factory_id: FactoryId;
+  period_no: number;
+  period_month: number;
+  period_year: number;
+  request_date: string;
+  employee_id: string | null;
+  employee_name: string;
+  department: string;
+  request_time_label: string;
+  requested_hours: number;
+  approved_ot1: number;
+  approved_ot2: number;
+  approved_ot3: number;
+  approved_total: number;
+  request_status: string;
+  uploader_username: string;
+  metadata: Record<string, unknown>;
+}
+
+interface OtRequestLogDbRow {
+  id: number;
+  batch_id: number;
+  factory_id: FactoryId;
+  request_date: string;
+  employee_id: string | null;
+  employee_name: string;
+  department: string;
+  request_time_label: string;
+  requested_hours: number;
+  approved_ot1: number;
+  approved_ot2: number;
+  approved_ot3: number;
+  approved_total: number;
+  request_status: string;
+  uploader_username: string;
+  created_at: string;
+}
+
+interface CurrentBatchGroup {
+  employeeId: string | null;
+  employeeName: string;
+  department: string;
+  requestDate: string;
+  requestIntervals: RequestInterval[];
+  requestLabels: string[];
+  unsignedCount: number;
 }
 
 function cleanEnvValue(value: string | undefined): string {
@@ -98,6 +169,11 @@ function normalizePersonName(value: string): string {
     .toLowerCase()
     .replace(/^(นาย|นางสาว|น\.ส\.|นส\.|นาง|คุณ|mr\.?|mrs\.?|ms\.?|miss)\s*/i, "")
     .replace(/[\s.]/g, "");
+}
+
+async function computeFileHash(file: File): Promise<string> {
+  const buffer = Buffer.from(await file.arrayBuffer());
+  return createHash("sha256").update(buffer).digest("hex");
 }
 
 function buildFullName(firstName: string, lastName: string): string {
@@ -212,6 +288,35 @@ function mergeIntervals(intervals: RequestInterval[]): RequestInterval[] {
   }
 
   return merged;
+}
+
+function formatMinuteLabel(totalMinutes: number): string {
+  const minutesInDay = 24 * 60;
+  const normalized = ((totalMinutes % minutesInDay) + minutesInDay) % minutesInDay;
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function formatIntervalLabel(interval: RequestInterval): string {
+  const endMinute =
+    interval.endMinute > 24 * 60 ? interval.endMinute - 24 * 60 : interval.endMinute;
+  return `${formatMinuteLabel(interval.startMinute)}-${formatMinuteLabel(endMinute)}`;
+}
+
+function formatIntervalsLabel(intervals: RequestInterval[]): string {
+  return mergeIntervals(intervals)
+    .map((interval) => formatIntervalLabel(interval))
+    .join(", ");
+}
+
+function sumRequestedHours(intervals: RequestInterval[]): number {
+  const merged = mergeIntervals(intervals);
+  const totalHours = merged.reduce(
+    (total, interval) => total + (interval.endMinute - interval.startMinute) / 60,
+    0
+  );
+  return roundDownHalfHour(totalHours);
 }
 
 function formatTimePartsInThailand(date: Date): { hour: number; minute: number } {
@@ -423,6 +528,64 @@ export async function processOtRequestUpload(params: {
   const periodStart = toIsoDate(periodRange.start);
   const periodEnd = toIsoDate(periodRange.end);
 
+  const batchRows = await fetchAllRows<ExistingBatchRow>(
+    "hr_ot_request_batches",
+    "id,metadata",
+    (query) =>
+      query
+        .eq("factory_id", factoryId)
+        .eq("period_no", selection.period)
+        .eq("period_month", selection.month)
+        .eq("period_year", selection.year)
+        .order("created_at", { ascending: true })
+  );
+
+  const existingHashes = new Set<string>();
+  for (const batch of batchRows) {
+    const hashes = Array.isArray(batch.metadata?.sourceFileHashes)
+      ? batch.metadata?.sourceFileHashes
+      : [];
+    for (const hash of hashes || []) {
+      if (typeof hash === "string" && hash.trim()) {
+        existingHashes.add(hash.trim());
+      }
+    }
+  }
+
+  const preparedFiles = await Promise.all(
+    files.map(async (file) => ({
+      file,
+      hash: await computeFileHash(file)
+    }))
+  );
+
+  const seenUploadHashes = new Set<string>();
+  const acceptedFiles: Array<{ file: File; hash: string }> = [];
+  let duplicateFileCount = 0;
+
+  for (const preparedFile of preparedFiles) {
+    if (existingHashes.has(preparedFile.hash) || seenUploadHashes.has(preparedFile.hash)) {
+      duplicateFileCount += 1;
+      continue;
+    }
+    seenUploadHashes.add(preparedFile.hash);
+    acceptedFiles.push(preparedFile);
+  }
+
+  if (acceptedFiles.length === 0) {
+    return {
+      batchId: 0,
+      processedFileCount: 0,
+      duplicateFileCount,
+      extractedEntryCount: 0,
+      matchedEntryCount: 0,
+      unmatchedNames: [],
+      updatedOtRowCount: 0,
+      loggedRequestCount: 0,
+      statusCounts: {}
+    };
+  }
+
   const { data: createdBatch, error: createBatchError } = await supabase
     .from("hr_ot_request_batches")
     .insert({
@@ -431,9 +594,11 @@ export async function processOtRequestUpload(params: {
       period_month: selection.month,
       period_year: selection.year,
       uploader_username: username,
-      source_file_count: files.length,
+      source_file_count: acceptedFiles.length,
       metadata: {
-        sourceFileNames: files.map((file) => file.name)
+        sourceFileNames: acceptedFiles.map(({ file }) => file.name),
+        sourceFileHashes: acceptedFiles.map(({ hash }) => hash),
+        duplicateFileCount
       }
     })
     .select("id")
@@ -447,26 +612,35 @@ export async function processOtRequestUpload(params: {
 
   const employeeRows = await fetchAllRows<EmployeeNameRow>(
     "hr_employees",
-    "employee_id,first_name,last_name",
+    "employee_id,first_name,last_name,department",
     (query) => query.eq("factory_id", factoryId).order("employee_id", { ascending: true })
   );
+  const employeeById = new Map<string, { employeeName: string; department: string }>();
   const normalizedEmployeeNameMap = new Map<
     string,
     { employeeId: string; firstName: string; lastName: string }
   >();
 
   for (const employee of employeeRows) {
+    const employeeId = String(employee.employee_id ?? "").trim();
     const firstName = String(employee.first_name ?? "").trim();
     const lastName = String(employee.last_name ?? "").trim();
     const fullName = buildFullName(firstName, lastName);
     normalizedEmployeeNameMap.set(normalizePersonName(fullName), {
-      employeeId: String(employee.employee_id ?? "").trim(),
+      employeeId,
       firstName,
       lastName
     });
+    employeeById.set(employeeId, {
+      employeeName: fullName,
+      department: String(employee.department ?? "").trim()
+    });
   }
 
-  const extractedRows = await extractRowsWithGemini(geminiKey, files);
+  const extractedRows = await extractRowsWithGemini(
+    geminiKey,
+    acceptedFiles.map(({ file }) => file)
+  );
   const extractedEntries: ExtractedOtRequestEntry[] = extractedRows.map((row) => ({
     ...row,
     requestDate: parseDateToIso(row.requestDate, fallbackDate),
@@ -548,17 +722,69 @@ export async function processOtRequestUpload(params: {
     }
   }
 
+  const currentBatchGroups = new Map<string, CurrentBatchGroup>();
+  for (const entry of extractedEntries) {
+    const rawName = buildFullName(entry.firstName, entry.lastName);
+    const employeeName = entry.correctedName || rawName;
+    const groupKey = entry.employeeId
+      ? `matched:${entry.employeeId}|${entry.requestDate}`
+      : `unmatched:${employeeName}|${entry.requestDate}`;
+    const existingGroup = currentBatchGroups.get(groupKey) ?? {
+      employeeId: entry.employeeId,
+      employeeName,
+      department: entry.employeeId ? employeeById.get(entry.employeeId)?.department || "" : "",
+      requestDate: entry.requestDate,
+      requestIntervals: [],
+      requestLabels: [],
+      unsignedCount: 0
+    };
+
+    if (entry.requestRange) {
+      existingGroup.requestIntervals.push(entry.requestRange);
+    }
+
+    if (entry.workTimeLabel.trim()) {
+      existingGroup.requestLabels.push(entry.workTimeLabel.trim());
+    }
+
+    if (!(entry.hasEmployeeSignature && entry.hasSupervisorSignature && entry.requestRange)) {
+      existingGroup.unsignedCount += 1;
+    }
+
+    currentBatchGroups.set(groupKey, existingGroup);
+  }
+
+  const storedRequestEntries = await fetchAllRows<StoredRequestEntryRow>(
+    "hr_ot_request_entries",
+    "employee_id,request_date,request_start_minute,request_end_minute,has_employee_signature,has_supervisor_signature",
+    (query) =>
+      query
+        .eq("factory_id", factoryId)
+        .gte("request_date", periodStart)
+        .lte("request_date", periodEnd)
+        .order("request_date", { ascending: true })
+        .order("employee_id", { ascending: true })
+  );
+
   const signedRequestIntervalMap = new Map<string, RequestInterval[]>();
   const unsignedRequestCountMap = new Map<string, number>();
 
-  for (const entry of extractedEntries) {
-    if (!entry.employeeId) {
+  for (const entry of storedRequestEntries) {
+    if (!entry.employee_id) {
       continue;
     }
-    const key = `${entry.employeeId}|${entry.requestDate}`;
-    if (entry.hasEmployeeSignature && entry.hasSupervisorSignature && entry.requestRange) {
+    const key = `${entry.employee_id}|${entry.request_date}`;
+    if (
+      entry.has_employee_signature &&
+      entry.has_supervisor_signature &&
+      entry.request_start_minute !== null &&
+      entry.request_end_minute !== null
+    ) {
       const bucket = signedRequestIntervalMap.get(key) ?? [];
-      bucket.push(entry.requestRange);
+      bucket.push({
+        startMinute: entry.request_start_minute,
+        endMinute: entry.request_end_minute
+      });
       signedRequestIntervalMap.set(key, bucket);
       continue;
     }
@@ -572,7 +798,7 @@ export async function processOtRequestUpload(params: {
 
   const otRows = await fetchAllRows<OTDailyRequestRow>(
     "hr_ot_daily",
-    "factory_id,work_date,employee_id,entered_at,exited_at,ot1_before,ot1_after,ot2_before,ot2_after,ot3_before,ot3_after",
+    "id,factory_id,work_date,employee_id,entered_at,exited_at,ot1_before,ot1_after,ot2_before,ot2_after,ot3_before,ot3_after",
     (query) =>
       query
         .eq("factory_id", factoryId)
@@ -582,6 +808,114 @@ export async function processOtRequestUpload(params: {
         .order("employee_id", { ascending: true })
         .order("entered_at", { ascending: true })
   );
+
+  const otRowsByKey = new Map<string, OTDailyRequestRow[]>();
+  for (const row of otRows) {
+    const key = `${row.employee_id}|${row.work_date}`;
+    const bucket = otRowsByKey.get(key) ?? [];
+    bucket.push(row);
+    otRowsByKey.set(key, bucket);
+  }
+
+  const requestLogPayload: OtRequestLogInsertRow[] = [];
+  for (const group of currentBatchGroups.values()) {
+    const mergedCurrentIntervals = mergeIntervals(group.requestIntervals);
+    const uniqueRequestLabels = [...new Set(group.requestLabels.filter(Boolean))];
+    const requestTimeLabel =
+      mergedCurrentIntervals.length > 0
+        ? formatIntervalsLabel(mergedCurrentIntervals)
+        : uniqueRequestLabels.join(", ");
+    const requestedHours =
+      mergedCurrentIntervals.length > 0 ? sumRequestedHours(mergedCurrentIntervals) : 0;
+
+    let approvedOt1 = 0;
+    let approvedOt2 = 0;
+    let approvedOt3 = 0;
+    let approvedTotal = 0;
+    let requestStatus = "unsubmitted";
+
+    if (!group.employeeId) {
+      requestStatus = "unmatched_name";
+    } else {
+      const key = `${group.employeeId}|${group.requestDate}`;
+      const relatedRows = otRowsByKey.get(key) ?? [];
+
+      if (relatedRows.length === 0) {
+        requestStatus = group.unsignedCount > 0 ? "missing_signature" : "no_ot_record";
+      } else if (mergedCurrentIntervals.length === 0) {
+        requestStatus = group.unsignedCount > 0 ? "missing_signature" : "invalid_time_range";
+      } else {
+        const actualOt1 = relatedRows.reduce(
+          (total, row) => total + Number(row.ot1_before ?? 0) + Number(row.ot1_after ?? 0),
+          0
+        );
+        const actualOt2 = relatedRows.reduce(
+          (total, row) => total + Number(row.ot2_before ?? 0) + Number(row.ot2_after ?? 0),
+          0
+        );
+        const actualOt3 = relatedRows.reduce(
+          (total, row) => total + Number(row.ot3_before ?? 0) + Number(row.ot3_after ?? 0),
+          0
+        );
+        const actualTotal = roundTwo(actualOt1 + actualOt2 + actualOt3);
+        const sessionApprovedTotal = roundTwo(
+          relatedRows.reduce(
+            (total, row) =>
+              total + calcRequestedHoursForSession(row.entered_at, row.exited_at, mergedCurrentIntervals),
+            0
+          )
+        );
+
+        approvedTotal = Math.min(actualTotal, sessionApprovedTotal);
+        [approvedOt1, approvedOt2, approvedOt3] = allocateApprovedHours(
+          [actualOt1, actualOt2, actualOt3],
+          approvedTotal
+        );
+        approvedOt1 = roundTwo(approvedOt1);
+        approvedOt2 = roundTwo(approvedOt2);
+        approvedOt3 = roundTwo(approvedOt3);
+
+        if (approvedTotal <= 0) {
+          requestStatus = "no_overlap";
+        } else if (approvedTotal + 0.001 < actualTotal) {
+          requestStatus = "partial";
+        } else {
+          requestStatus = "approved";
+        }
+      }
+    }
+
+    requestLogPayload.push({
+      batch_id: batchId,
+      factory_id: factoryId,
+      period_no: selection.period,
+      period_month: selection.month,
+      period_year: selection.year,
+      request_date: group.requestDate,
+      employee_id: group.employeeId,
+      employee_name: group.employeeName,
+      department: group.department,
+      request_time_label: requestTimeLabel,
+      requested_hours: requestedHours,
+      approved_ot1: approvedOt1,
+      approved_ot2: approvedOt2,
+      approved_ot3: approvedOt3,
+      approved_total: roundTwo(approvedOt1 + approvedOt2 + approvedOt3),
+      request_status: requestStatus,
+      uploader_username: username,
+      metadata: {
+        unsignedCount: group.unsignedCount,
+        requestLabels: uniqueRequestLabels
+      }
+    });
+  }
+
+  for (const chunk of chunkArray(requestLogPayload, 500)) {
+    const { error } = await supabase.from("hr_ot_request_logs").insert(chunk);
+    if (error) {
+      throw new Error(`[hr_ot_request_logs] ${error.message}`);
+    }
+  }
 
   const otUpdatePayload = otRows.map((row) => {
     const key = `${row.employee_id}|${row.work_date}`;
@@ -623,6 +957,7 @@ export async function processOtRequestUpload(params: {
     }
 
     return {
+      id: row.id,
       factory_id: row.factory_id,
       work_date: row.work_date,
       employee_id: row.employee_id,
@@ -636,11 +971,23 @@ export async function processOtRequestUpload(params: {
   });
 
   for (const chunk of chunkArray(otUpdatePayload, 500)) {
-    const { error } = await supabase.from("hr_ot_daily").upsert(chunk, {
-      onConflict: "factory_id,work_date,employee_id,entered_at,exited_at"
-    });
-    if (error) {
-      throw new Error(`[hr_ot_daily] ${error.message}`);
+    const results = await Promise.all(
+      chunk.map((row) =>
+        supabase
+          .from("hr_ot_daily")
+          .update({
+            ot_request_status: row.ot_request_status,
+            ot1_after_request: row.ot1_after_request,
+            ot2_after_request: row.ot2_after_request,
+            ot3_after_request: row.ot3_after_request
+          })
+          .eq("id", row.id)
+      )
+    );
+
+    const failedResult = results.find((result) => result.error);
+    if (failedResult?.error) {
+      throw new Error(`[hr_ot_daily] ${failedResult.error.message}`);
     }
   }
 
@@ -655,7 +1002,10 @@ export async function processOtRequestUpload(params: {
       extracted_entry_count: extractedEntries.length,
       unmatched_name_count: unresolvedAfterCorrection.length,
       metadata: {
-        sourceFileNames: files.map((file) => file.name),
+        sourceFileNames: acceptedFiles.map(({ file }) => file.name),
+        sourceFileHashes: acceptedFiles.map(({ hash }) => hash),
+        duplicateFileCount,
+        loggedRequestCount: requestLogPayload.length,
         statusCounts
       }
     })
@@ -667,11 +1017,56 @@ export async function processOtRequestUpload(params: {
 
   return {
     batchId,
-    processedFileCount: files.length,
+    processedFileCount: acceptedFiles.length,
+    duplicateFileCount,
     extractedEntryCount: extractedEntries.length,
     matchedEntryCount: extractedEntries.filter((entry) => Boolean(entry.employeeId)).length,
     unmatchedNames: unresolvedAfterCorrection,
     updatedOtRowCount: otUpdatePayload.length,
+    loggedRequestCount: requestLogPayload.length,
     statusCounts
+  };
+}
+
+export async function readOtRequestHistory(
+  factoryId: FactoryId,
+  selection: PeriodSelection
+): Promise<OtRequestHistoryResponse> {
+  const rows = await fetchAllRows<OtRequestLogDbRow>(
+    "hr_ot_request_logs",
+    "id,batch_id,factory_id,request_date,employee_id,employee_name,department,request_time_label,requested_hours,approved_ot1,approved_ot2,approved_ot3,approved_total,request_status,uploader_username,created_at",
+    (query) =>
+      query
+        .eq("factory_id", factoryId)
+        .eq("period_no", selection.period)
+        .eq("period_month", selection.month)
+        .eq("period_year", selection.year)
+        .order("created_at", { ascending: false })
+        .order("request_date", { ascending: false })
+  );
+
+  const mappedRows: OtRequestHistoryRow[] = rows.map((row) => ({
+    id: row.id,
+    batchId: row.batch_id,
+    factoryId: row.factory_id,
+    requestDate: row.request_date,
+    employeeId: row.employee_id,
+    employeeName: row.employee_name,
+    department: row.department,
+    requestTimeLabel: row.request_time_label,
+    requestedHours: Number(row.requested_hours ?? 0),
+    approvedOt1: Number(row.approved_ot1 ?? 0),
+    approvedOt2: Number(row.approved_ot2 ?? 0),
+    approvedOt3: Number(row.approved_ot3 ?? 0),
+    approvedTotal: Number(row.approved_total ?? 0),
+    requestStatus: row.request_status,
+    uploaderUsername: row.uploader_username,
+    createdAt: row.created_at
+  }));
+
+  return {
+    rows: mappedRows,
+    periodLabel: buildPeriodLabel(selection),
+    recordCount: mappedRows.length
   };
 }

@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
 
-import { getSession } from "@/lib/auth";
+import { getSession, isRequestUploaderSession, isVisitorSession } from "@/lib/auth";
 import { processOtRequestUpload, MAX_OT_REQUEST_FILES } from "@/lib/ot-request";
 import { clampSelection } from "@/lib/periods";
+import { FactoryId } from "@/lib/types";
+
+function parseFactoryId(value: FormDataEntryValue | null): FactoryId | null {
+  const factoryId = String(value ?? "").trim();
+  return factoryId === "factory1" || factoryId === "factory3" ? factoryId : null;
+}
 
 function normalizeUploadErrorMessage(rawMessage: string): string {
   if (
-    /hr_ot_request_batches|hr_ot_request_entries|Could not find the table|relation .*does not exist/i.test(
+    /hr_ot_request_batches|hr_ot_request_entries|hr_ot_request_logs|Could not find the table|relation .*does not exist/i.test(
       rawMessage
     )
   ) {
@@ -26,7 +32,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
+  if (isVisitorSession(session)) {
+    return NextResponse.json({ message: "บัญชี visitor ไม่มีสิทธิ์อัปโหลดใบคำขอ OT" }, { status: 403 });
+  }
+
   const formData = await request.formData();
+  const requestedFactoryId = parseFactoryId(formData.get("factoryId"));
+  const factoryId = isRequestUploaderSession(session) ? requestedFactoryId : session.factoryId;
+
+  if (!factoryId) {
+    return NextResponse.json({ message: "กรุณาเลือกโรงงานก่อนอัปโหลดใบคำขอ OT" }, { status: 400 });
+  }
+
   const files = [...formData.getAll("files"), ...formData.getAll("files[]")].filter(
     (item): item is File => item instanceof File
   );
@@ -50,17 +67,23 @@ export async function POST(request: Request) {
 
   try {
     const result = await processOtRequestUpload({
-      factoryId: session.factoryId,
+      factoryId,
       username: session.username,
       selection,
       files
     });
 
+    const message =
+      result.processedFileCount === 0 && result.duplicateFileCount > 0
+        ? `ไฟล์ที่อัปโหลดซ้ำทั้งหมด ระบบจึงข้ามการประมวลผล ${result.duplicateFileCount} รูป`
+        : `อัปโหลดใบขอ OT สำเร็จ ${result.processedFileCount} รูป ` +
+          `สกัดข้อมูล ${result.extractedEntryCount} รายการ ` +
+          `จับคู่พนักงานได้ ${result.matchedEntryCount} รายการ ` +
+          `และบันทึกประวัติ ${result.loggedRequestCount} รายการ` +
+          (result.duplicateFileCount > 0 ? ` | ข้ามไฟล์ซ้ำ ${result.duplicateFileCount} รูป` : "");
+
     return NextResponse.json({
-      message:
-        `อัปโหลดใบขอ OT สำเร็จ ${result.processedFileCount} รูป ` +
-        `สกัดข้อมูล ${result.extractedEntryCount} รายการ ` +
-        `จับคู่พนักงานได้ ${result.matchedEntryCount} รายการ`,
+      message,
       ...result
     });
   } catch (error) {

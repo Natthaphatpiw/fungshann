@@ -148,6 +148,36 @@ create index if not exists hr_ot_request_entries_factory_date_employee_idx
 create index if not exists hr_ot_request_entries_batch_idx
   on public.hr_ot_request_entries (batch_id);
 
+create table if not exists public.hr_ot_request_logs (
+  id bigserial primary key,
+  batch_id bigint not null references public.hr_ot_request_batches(id) on delete cascade,
+  factory_id text not null check (factory_id in ('factory1', 'factory3')),
+  period_no smallint not null check (period_no in (1, 2)),
+  period_month smallint not null check (period_month between 1 and 12),
+  period_year integer not null,
+  request_date date not null,
+  employee_id text,
+  employee_name text not null default '',
+  department text not null default '',
+  request_time_label text not null default '',
+  requested_hours numeric(10,2) not null default 0,
+  approved_ot1 numeric(10,2) not null default 0,
+  approved_ot2 numeric(10,2) not null default 0,
+  approved_ot3 numeric(10,2) not null default 0,
+  approved_total numeric(10,2) not null default 0,
+  request_status text not null default 'unsubmitted',
+  uploader_username text not null default '',
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists hr_ot_request_logs_factory_period_idx
+  on public.hr_ot_request_logs (factory_id, period_year, period_month, period_no, request_date);
+
+create index if not exists hr_ot_request_logs_batch_idx
+  on public.hr_ot_request_logs (batch_id);
+
 create index if not exists hr_ot_daily_factory_workdate_idx
   on public.hr_ot_daily (factory_id, work_date);
 
@@ -197,6 +227,11 @@ for each row execute function public.set_row_updated_at();
 drop trigger if exists trg_hr_ot_request_entries_updated_at on public.hr_ot_request_entries;
 create trigger trg_hr_ot_request_entries_updated_at
 before update on public.hr_ot_request_entries
+for each row execute function public.set_row_updated_at();
+
+drop trigger if exists trg_hr_ot_request_logs_updated_at on public.hr_ot_request_logs;
+create trigger trg_hr_ot_request_logs_updated_at
+before update on public.hr_ot_request_logs
 for each row execute function public.set_row_updated_at();
 
 drop trigger if exists trg_hr_wages_updated_at on public.hr_wages;

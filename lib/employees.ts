@@ -175,6 +175,13 @@ export async function readEmployeeMap(factoryId: FactoryId): Promise<Map<string,
   return new Map(employees.map((employee) => [employee.__id, employee]));
 }
 
+export async function readEmployeeDepartments(factoryId: FactoryId): Promise<string[]> {
+  const employees = await readEmployees(factoryId);
+  return [...new Set(employees.map((employee) => employee.__department.trim()).filter(Boolean))].sort(
+    (left, right) => left.localeCompare(right, "th")
+  );
+}
+
 export function getEmployeeDataColumns(headers: string[]): string[] {
   return headers.filter((header) => !EMPLOYEE_SPECIAL_COLUMNS.includes(header as never));
 }

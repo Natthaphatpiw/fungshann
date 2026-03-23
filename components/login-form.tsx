@@ -1,16 +1,41 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { DEMO_ACCOUNTS } from "@/lib/constants";
+import { FactoryId } from "@/lib/types";
 
-export function LoginForm() {
+interface LoginFormProps {
+  departmentsByFactory: Record<FactoryId, string[]>;
+}
+
+export function LoginForm({ departmentsByFactory }: LoginFormProps) {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [department, setDepartment] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const selectedAccount = useMemo(
+    () => DEMO_ACCOUNTS.find((account) => account.username === username.trim()) ?? null,
+    [username]
+  );
+  const departmentOptions = selectedAccount ? departmentsByFactory[selectedAccount.factoryId] ?? [] : [];
+  const requiresDepartment = Boolean(selectedAccount?.requiresDepartmentSelection);
+
+  useEffect(() => {
+    if (!requiresDepartment) {
+      setDepartment("");
+      return;
+    }
+
+    if (department && departmentOptions.includes(department)) {
+      return;
+    }
+
+    setDepartment("");
+  }, [department, departmentOptions, requiresDepartment]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -22,7 +47,7 @@ export function LoginForm() {
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password, department })
     });
 
     if (!response.ok) {
@@ -32,7 +57,8 @@ export function LoginForm() {
       return;
     }
 
-    router.replace("/dashboard");
+    const payload = (await response.json().catch(() => null)) as { redirectPath?: string } | null;
+    router.replace(payload?.redirectPath || "/dashboard");
     router.refresh();
   }
 
@@ -72,9 +98,31 @@ export function LoginForm() {
             />
           </label>
 
+          {requiresDepartment ? (
+            <label className="field">
+              <span>แผนกสำหรับสิทธิ์ Visitor</span>
+              <select
+                value={department}
+                onChange={(event) => setDepartment(event.target.value)}
+                required
+              >
+                <option value="">เลือกแผนก</option>
+                {departmentOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
           {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
 
-          <button className="primary-button" type="submit" disabled={isSubmitting}>
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={isSubmitting || (requiresDepartment && !department)}
+          >
             {isSubmitting ? "กำลังตรวจสอบ..." : "เข้าใช้งานระบบ"}
           </button>
         </form>
@@ -88,9 +136,11 @@ export function LoginForm() {
               onClick={() => {
                 setUsername(account.username);
                 setPassword(account.password);
+                setDepartment("");
               }}
             >
               <div className="credential-title">{account.factoryLabel}</div>
+              <div className="credential-row">Role: {account.role}</div>
               <div className="credential-row">User: {account.username}</div>
               <div className="credential-row">Pass: {account.password}</div>
             </button>

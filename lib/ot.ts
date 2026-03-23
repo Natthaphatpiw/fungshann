@@ -1043,10 +1043,18 @@ export async function getOtLastUpdatedAt(factoryId: FactoryId): Promise<string |
 
 export async function buildOtSummary(
   factoryId: FactoryId,
-  selection: PeriodSelection
+  selection: PeriodSelection,
+  options?: {
+    departmentScope?: string | null;
+  }
 ): Promise<OTSummaryResponse> {
-  const employees = await readEmployees(factoryId);
-  const records = await loadOtRecords(factoryId);
+  const departmentScope = String(options?.departmentScope ?? "").trim();
+  const employees = (await readEmployees(factoryId)).filter(
+    (employee) => !departmentScope || employee.__department.trim() === departmentScope
+  );
+  const records = (await loadOtRecords(factoryId)).filter(
+    (record) => !departmentScope || record.department.trim() === departmentScope
+  );
   const lastUpdatedAt = await getOtLastUpdatedAt(factoryId);
   const { start, end } = getPeriodRange(selection);
   const startKey = toIsoDate(start);
@@ -1057,9 +1065,7 @@ export async function buildOtSummary(
     employees.map((employee) => [employee.__id, String(employee["การจ้างงาน"] || "").trim()])
   );
 
-  const filteredRecords = records.filter(
-    (record) => record.workDate >= startKey && record.workDate <= endKey
-  );
+  const filteredRecords = records.filter((record) => record.workDate >= startKey && record.workDate <= endKey);
 
   const rowsMap = new Map<string, OTSummaryRow>();
   const workDaySets = new Map<string, Set<string>>();

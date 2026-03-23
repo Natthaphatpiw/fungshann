@@ -1,8 +1,13 @@
 import { redirect } from "next/navigation";
 
-import { getSession } from "@/lib/auth";
+import { getSession, isRequestUploaderSession } from "@/lib/auth";
 
 export default async function HomePage() {
   const session = await getSession();
-  redirect(session ? "/dashboard" : "/login");
+
+  if (!session) {
+    redirect("/login");
+  }
+
+  redirect(isRequestUploaderSession(session) ? "/request-center" : "/dashboard");
 }

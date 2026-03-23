@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 
-import { getSession } from "@/lib/auth";
+import { getSession, isRequestUploaderSession, isVisitorSession } from "@/lib/auth";
 import { readEmployeeHeaders } from "@/lib/employees";
 
 export async function GET() {
@@ -9,6 +9,14 @@ export async function GET() {
 
   if (!session) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isVisitorSession(session)) {
+    return NextResponse.json({ message: "บัญชี visitor ไม่มีสิทธิ์ดาวน์โหลดเทมเพลตพนักงาน" }, { status: 403 });
+  }
+
+  if (isRequestUploaderSession(session)) {
+    return NextResponse.json({ message: "บัญชีนี้ไม่มีสิทธิ์ดาวน์โหลดเทมเพลตพนักงาน" }, { status: 403 });
   }
 
   const headers = await readEmployeeHeaders(session.factoryId);

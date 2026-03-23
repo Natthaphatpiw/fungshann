@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getSession } from "@/lib/auth";
+import { getSession, isRequestUploaderSession, isVisitorSession } from "@/lib/auth";
 import {
   EMPLOYEE_SPECIAL_COLUMNS,
   getEmployeeDataColumns,
@@ -14,6 +14,14 @@ export async function GET() {
 
   if (!session) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isVisitorSession(session)) {
+    return NextResponse.json({ message: "บัญชี visitor ไม่มีสิทธิ์เข้าถึงข้อมูลพนักงาน" }, { status: 403 });
+  }
+
+  if (isRequestUploaderSession(session)) {
+    return NextResponse.json({ message: "บัญชีนี้ไม่มีสิทธิ์เข้าถึงข้อมูลพนักงาน" }, { status: 403 });
   }
 
   const columns = await readEmployeeHeaders(session.factoryId);
@@ -35,6 +43,14 @@ export async function POST(request: Request) {
 
   if (!session) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isVisitorSession(session)) {
+    return NextResponse.json({ message: "บัญชี visitor ไม่มีสิทธิ์เพิ่มพนักงาน" }, { status: 403 });
+  }
+
+  if (isRequestUploaderSession(session)) {
+    return NextResponse.json({ message: "บัญชีนี้ไม่มีสิทธิ์เพิ่มพนักงาน" }, { status: 403 });
   }
 
   const body = (await request.json().catch(() => null)) as
@@ -68,6 +84,14 @@ export async function PUT(request: Request) {
 
   if (!session) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isVisitorSession(session)) {
+    return NextResponse.json({ message: "บัญชี visitor ไม่มีสิทธิ์แก้ไขข้อมูลพนักงาน" }, { status: 403 });
+  }
+
+  if (isRequestUploaderSession(session)) {
+    return NextResponse.json({ message: "บัญชีนี้ไม่มีสิทธิ์แก้ไขข้อมูลพนักงาน" }, { status: 403 });
   }
 
   const body = (await request.json().catch(() => null)) as
@@ -117,6 +141,14 @@ export async function DELETE(request: Request) {
 
   if (!session) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isVisitorSession(session)) {
+    return NextResponse.json({ message: "บัญชี visitor ไม่มีสิทธิ์ลบพนักงาน" }, { status: 403 });
+  }
+
+  if (isRequestUploaderSession(session)) {
+    return NextResponse.json({ message: "บัญชีนี้ไม่มีสิทธิ์ลบพนักงาน" }, { status: 403 });
   }
 
   const { searchParams } = new URL(request.url);

@@ -1,9 +1,12 @@
 export type FactoryId = "factory1" | "factory3";
+export type SessionRole = "admin" | "visitor" | "request_uploader";
 
 export interface SessionAccount {
   factoryId: FactoryId;
   factoryLabel: string;
   username: string;
+  role: SessionRole;
+  departmentScope: string | null;
 }
 
 export interface EmployeeRecord {
@@ -122,4 +125,29 @@ export interface OTSummaryResponse {
   };
   recordCount: number;
   lastUpdatedAt: string | null;
+}
+
+export interface OtRequestHistoryRow {
+  id: number;
+  batchId: number;
+  factoryId: FactoryId;
+  requestDate: string;
+  employeeId: string | null;
+  employeeName: string;
+  department: string;
+  requestTimeLabel: string;
+  requestedHours: number;
+  approvedOt1: number;
+  approvedOt2: number;
+  approvedOt3: number;
+  approvedTotal: number;
+  requestStatus: string;
+  uploaderUsername: string;
+  createdAt: string;
+}
+
+export interface OtRequestHistoryResponse {
+  rows: OtRequestHistoryRow[];
+  periodLabel: string;
+  recordCount: number;
 }

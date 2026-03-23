@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getSession } from "@/lib/auth";
+import { getSession, isRequestUploaderSession, isVisitorSession } from "@/lib/auth";
 import { buildPeriodLabel, clampSelection } from "@/lib/periods";
 import { calculateWageForPeriod, ensureEmployeeHasPayrollColumns } from "@/lib/wage";
 
@@ -9,6 +9,14 @@ export async function POST(request: Request) {
 
   if (!session) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isVisitorSession(session)) {
+    return NextResponse.json({ message: "บัญชี visitor ไม่มีสิทธิ์คำนวณค่าจ้าง" }, { status: 403 });
+  }
+
+  if (isRequestUploaderSession(session)) {
+    return NextResponse.json({ message: "บัญชีนี้ไม่มีสิทธิ์คำนวณค่าจ้าง" }, { status: 403 });
   }
 
   const body = (await request.json().catch(() => null)) as
