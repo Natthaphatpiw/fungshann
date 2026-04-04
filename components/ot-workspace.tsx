@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 
+import { formatBangkokDateTime, formatBangkokTime } from "@/lib/datetime";
 import { OTSummaryResponse, OTSummaryRow, SessionAccount } from "@/lib/types";
 
 type PeriodSelection = ReturnType<typeof buildDefaultSelection>;
@@ -45,23 +46,6 @@ function compareText(left: string, right: string) {
   return left.localeCompare(right, "th");
 }
 
-function formatThaiTime(isoDateTime: string) {
-  const date = new Date(isoDateTime);
-
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-
-  // Scan timestamps are persisted as UTC-normalised values from server parsing.
-  // Showing as UTC keeps the same wall-clock time as the source attendance file.
-  return date.toLocaleTimeString("th-TH", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: "UTC"
-  });
-}
-
 function buildDayHoverText(row: OTSummaryRow, dayKey: string) {
   const sessions = row.daySessions[dayKey] || [];
 
@@ -72,7 +56,7 @@ function buildDayHoverText(row: OTSummaryRow, dayKey: string) {
   return sessions
     .map(
       (session, index) =>
-        `รอบ ${index + 1}: เข้า ${formatThaiTime(session.enteredAt)} ออก ${formatThaiTime(
+        `รอบ ${index + 1}: เข้า ${formatBangkokTime(session.enteredAt)} ออก ${formatBangkokTime(
           session.exitedAt
         )} (OT หลัง ${session.otAfter.toFixed(2)} ชม.${
           session.otBefore > 0 ? ` | ก่อน ${session.otBefore.toFixed(2)} ชม.` : ""
@@ -94,7 +78,7 @@ function buildRowHoverText(row: OTSummaryRow) {
       const sessionText = sessions
         .map(
           (session) =>
-            `${formatThaiTime(session.enteredAt)}-${formatThaiTime(session.exitedAt)} (หลัง ${session.otAfter.toFixed(
+            `${formatBangkokTime(session.enteredAt)}-${formatBangkokTime(session.exitedAt)} (หลัง ${session.otAfter.toFixed(
               2
             )}${session.otBefore > 0 ? ` | ก่อน ${session.otBefore.toFixed(2)}` : ""})`
         )
@@ -673,9 +657,7 @@ export function OtWorkspace({ session }: OtWorkspaceProps) {
           <div className="summary-pill">
             <span>อัปเดตล่าสุด</span>
             <strong>
-              {summary?.lastUpdatedAt
-                ? new Date(summary.lastUpdatedAt).toLocaleString("th-TH")
-                : "ยังไม่มีข้อมูลนำเข้า"}
+              {summary?.lastUpdatedAt ? formatBangkokDateTime(summary.lastUpdatedAt, { includeSeconds: true }) : "ยังไม่มีข้อมูลนำเข้า"}
             </strong>
           </div>
         </div>

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { formatPlainDate } from "@/lib/datetime";
+
 type PeriodSelection = {
   month: number;
   year: number;
@@ -243,7 +245,7 @@ export function SalaryWorkspace() {
           </div>
           <div className="summary-pill">
             <span>งวดวันที่จ่าย</span>
-            <strong>{statusPayload?.payDate || "-"}</strong>
+            <strong>{formatPlainDate(statusPayload?.payDate)}</strong>
           </div>
           <div className="summary-pill">
             <span>จำนวนพนักงาน</span>

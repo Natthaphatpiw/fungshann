@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { formatBangkokDateTime, formatPlainDate } from "@/lib/datetime";
 import { FactoryId, OtRequestHistoryResponse, OtRequestHistoryRow } from "@/lib/types";
 
 type PeriodSelection = ReturnType<typeof buildDefaultSelection>;
@@ -172,7 +173,7 @@ export function OtRequestHistoryWorkspace() {
                   {history.rows.length > 0 ? (
                     history.rows.map((row) => (
                       <tr key={row.id}>
-                        <td>{row.requestDate}</td>
+                        <td>{formatPlainDate(row.requestDate)}</td>
                         <td>{row.employeeId || "-"}</td>
                         <td>{row.employeeName || "-"}</td>
                         <td>{row.department || "-"}</td>
@@ -185,7 +186,7 @@ export function OtRequestHistoryWorkspace() {
                         <td className="numeric strong">{row.approvedTotal.toFixed(2)}</td>
                         <td>{formatStatusLabel(row.requestStatus)}</td>
                         <td>{row.uploaderUsername}</td>
-                        <td>{new Date(row.createdAt).toLocaleString("th-TH")}</td>
+                        <td>{formatBangkokDateTime(row.createdAt, { includeSeconds: true })}</td>
                       </tr>
                     ))
                   ) : (

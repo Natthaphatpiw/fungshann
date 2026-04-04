@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "migrate:supabase": "node scripts/migrate-csv-to-supabase.mjs"
+    "migrate:supabase": "node scripts/migrate-csv-to-supabase.mjs",
+    "test:datetime": "node --test tests/datetime-formatters.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.46.0",

@@ -2,8 +2,42 @@ import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 
 import { getSession, isRequestUploaderSession, isVisitorSession } from "@/lib/auth";
+import { formatBangkokDateTime, formatPlainDate } from "@/lib/datetime";
 import { buildOtSummary } from "@/lib/ot";
 import { clampSelection } from "@/lib/periods";
+
+function buildSessionSummary(
+  daySessions: Record<
+    string,
+    Array<{
+      enteredAt: string;
+      exitedAt: string;
+    }>
+  >
+) {
+  const entries = Object.entries(daySessions).filter(([, sessions]) => sessions.length > 0);
+
+  if (entries.length === 0) {
+    return "-";
+  }
+
+  return entries
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([workDate, sessions]) => {
+      const label = formatPlainDate(workDate);
+      const sessionText = sessions
+        .map(
+          (session, index) =>
+            `รอบ ${index + 1}: ${formatBangkokDateTime(session.enteredAt)} -> ${formatBangkokDateTime(
+              session.exitedAt
+            )}`
+        )
+        .join(" | ");
+
+      return `${label}: ${sessionText}`;
+    })
+    .join("\n");
+}
 
 export async function GET(request: Request) {
   const session = await getSession();
@@ -31,6 +65,7 @@ export async function GET(request: Request) {
     "ชื่อพนักงาน",
     "แผนก",
     "ตำแหน่ง",
+    "เวลาเข้า-ออก (เวลาไทย)",
     "จำนวนวันที่ทำงาน",
     "OT 1.5 หลังเลิกงาน",
     "OT 2 หลังเลิกงาน",
@@ -50,6 +85,7 @@ export async function GET(request: Request) {
     row.employeeName,
     row.department,
     row.position,
+    buildSessionSummary(row.daySessions),
     row.workDays,
     row.ot1,
     row.ot2,
@@ -65,6 +101,7 @@ export async function GET(request: Request) {
   ]);
   const totalRow = [
     "TOTAL",
+    "",
     "",
     "",
     "",
@@ -112,8 +149,18 @@ export async function GET(request: Request) {
       return;
     }
 
-    column.width = index <= 10 ? 16 : 12;
+    if (index === 4) {
+      column.width = 56;
+      return;
+    }
+
+    column.width = index <= 11 ? 16 : 12;
   });
+
+  worksheet.getColumn(5).alignment = {
+    vertical: "top",
+    wrapText: true
+  };
 
   const totalExcelRow = worksheet.rowCount;
   worksheet.getRow(totalExcelRow).font = {
